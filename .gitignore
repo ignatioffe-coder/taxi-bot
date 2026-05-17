@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.env
+taxi_data.db
+*.db
