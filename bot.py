@@ -437,3 +437,52 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+# Добавьте в bot.py новые обработчики
+
+@dp.message(Command("traffic"))
+async def traffic_forecast(message: types.Message):
+    """Прогноз пробок"""
+    await message.answer("🚗 Анализирую пробки...")
+    text = analytics.get_traffic_forecast()
+    await message.answer(text, parse_mode='Markdown')
+
+
+@dp.message(Command("district_traffic"))
+async def district_traffic_handler(message: types.Message):
+    """Анализ пробок по району"""
+    # Просим ввести район
+    await message.answer("Введите район Москвы (например: Центр (Тверская, Арбат), Курский вокзал, Аэропорт):")
+    
+    @dp.message(lambda m: m.text and not m.text.startswith('/'))
+    async def get_district(m):
+        text = analytics.get_district_traffic(m.text)
+        await m.answer(text, parse_mode='Markdown')
+
+
+# Добавьте кнопку в главное меню
+def get_main_keyboard():
+    kb = [
+        [KeyboardButton(text="📊 Рекомендации сейчас")],
+        [KeyboardButton(text="📍 Прислать коэффициент")],
+        [KeyboardButton(text="📈 Моя статистика")],
+        [KeyboardButton(text="🏆 Топ моменты")],
+        [KeyboardButton(text="🗺️ Карта спроса")],
+        [KeyboardButton(text="🚗 Пробки")],  # Новая кнопка
+        [KeyboardButton(text="📊 Прогноз пробок")],  # Новая кнопка
+        [KeyboardButton(text="🚕 Mini App")],
+        [KeyboardButton(text="🌡️ Погода")],
+        [KeyboardButton(text="❓ Помощь")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+
+# Обработчики новых кнопок
+@dp.message(F.text == "🚗 Пробки")
+async def traffic_button(message: types.Message):
+    await traffic_forecast(message)
+
+
+@dp.message(F.text == "📊 Прогноз пробок")
+async def traffic_forecast_button(message: types.Message):
+    await traffic_forecast(message)
