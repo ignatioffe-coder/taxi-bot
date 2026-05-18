@@ -143,54 +143,47 @@ def add_user(user_id: int, username: str, first_name: str, last_name: str):
 
 
 def get_user_stats(user_id: int) -> dict:
-    """Статистика пользователя (сколько записей, средний коэффициент, последняя запись)"""
-    conn = get_connection()
+    """Статистика пользователя"""
+    conn = sqlite3.connect(config.DB_PATH)
     cursor = conn.cursor()
     
-    if IS_POSTGRES:
-        cursor.execute("""
-            SELECT 
-                COUNT(*) as total_records, 
-                COALESCE(AVG(coefficient), 0) as avg_coef,
-                MAX(timestamp) as last_record
-            FROM coefficients 
-            WHERE user_id = %s
-        """, (user_id,))
-    else:
-        cursor.execute("""
-            SELECT 
-                COUNT(*) as total_records, 
-                COALESCE(AVG(coefficient), 0) as avg_coef,
-                MAX(timestamp) as last_record
-            FROM coefficients 
-            WHERE user_id = ?
-        """, (user_id,))
+    # Сначала проверим, есть ли вообще записи с таким user_id
+    cursor.execute("SELECT COUNT(*) FROM coefficients WHERE user_id = ?", (user_id,))
+    total = cursor.fetchone()[0]
+    
+    print(f"DEBUG: get_user_stats для user_id={user_id}, найдено записей={total}")
+    
+    if total == 0:
+        conn.close()
+        return {'total_records': 0, 'avg_coef': 0, 'last_record': 'нет'}
+    
+    cursor.execute("""
+        SELECT 
+            COUNT(*) as total_records, 
+            AVG(coefficient) as avg_coef,
+            MAX(timestamp) as last_record
+        FROM coefficients 
+        WHERE user_id = ?
+    """, (user_id,))
     
     row = cursor.fetchone()
     conn.close()
     
     if row and row[0] > 0:
-        # Форматируем дату
         last_record = row[2]
         if last_record:
-            if isinstance(last_record, datetime):
-                last_record = last_record.strftime('%d.%m.%Y %H:%M')
+            if isinstance(last_record, str):
+                last_record = last_record[:16]
             else:
                 last_record = str(last_record)[:16]
-        else:
-            last_record = "нет"
         
         return {
             'total_records': row[0],
-            'avg_coef': round(row[1], 2),
-            'last_record': last_record
+            'avg_coef': round(row[1], 2) if row[1] else 0,
+            'last_record': last_record or 'недавно'
         }
-    else:
-        return {
-            'total_records': 0,
-            'avg_coef': 0,
-            'last_record': 'нет'
-        }
+    
+    return {'total_records': 0, 'avg_coef': 0, 'last_record': 'нет'}
 
 
 def get_district_forecast(district: str) -> str:

@@ -486,3 +486,28 @@ async def traffic_button(message: types.Message):
 @dp.message(F.text == "📊 Прогноз пробок")
 async def traffic_forecast_button(message: types.Message):
     await traffic_forecast(message)
+
+@dp.message(F.text == "📈 Моя статистика")
+async def my_stats_handler(message: types.Message):
+    user_id = message.from_user.id
+    print(f"DEBUG: Запрос статистики от user_id={user_id}")
+    
+    stats = database.get_user_stats(user_id)
+    print(f"DEBUG: stats = {stats}")
+    
+    if not stats or stats.get('total_records', 0) == 0:
+        await message.answer(
+            "📊 Ты пока не присылал коэффициентов.\n\n"
+            "Нажми «Прислать коэффициент», чтобы начать!",
+            reply_markup=get_main_keyboard()
+        )
+        return
+
+    text = (
+        f"📈 Твоя статистика\n\n"
+        f"📝 Всего записей: {stats['total_records']}\n"
+        f"📈 Средний коэффициент: {stats['avg_coef']}x\n"
+        f"🕐 Последняя запись: {stats['last_record']}\n\n"
+        f"💡 Присылай данные чаще — помогаешь себе и коллегам!"
+    )
+    await message.answer(text, reply_markup=get_main_keyboard())
