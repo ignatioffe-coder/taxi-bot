@@ -8,11 +8,9 @@ import statistics
 import config
 
 # === ДЛЯ КАРТЫ ===
-import folium
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from PIL import Image
-import io
+import numpy as np
 import os
 
 # Координаты центров районов Москвы (широта, долгота)
@@ -67,15 +65,15 @@ DISTRICT_COORDS = {
 def get_color_by_coefficient(coef: float) -> str:
     """Возвращает цвет точки по коэффициенту"""
     if coef < 1.3:
-        return "#2ecc71"  # Зелёный
+        return "#2ecc71"
     elif coef < 1.7:
-        return "#f1c40f"  # Жёлтый
+        return "#f1c40f"
     elif coef < 2.1:
-        return "#e67e22"  # Оранжевый
+        return "#e67e22"
     elif coef < 2.5:
-        return "#e74c3c"  # Красный
+        return "#e74c3c"
     else:
-        return "#9b59b6"  # Фиолетовый
+        return "#9b59b6"
 
 
 def get_current_recommendations() -> str:
@@ -143,9 +141,13 @@ def get_current_recommendations() -> str:
 
 def generate_map() -> str:
     """
-    Генерирует красивую карту Москвы с точками спроса.
-    Возвращает путь к сохранённому PNG-файлу.
+    Генерирует красивую карту Москвы с реальной подложкой.
+    Возвращает путь к PNG-файлу.
     """
+    import geopandas as gpd
+    from shapely.geometry import Point
+    import contextily as ctx
+
     # Получаем данные за последние 30 минут
     conn = sqlite3.connect(config.DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -176,7 +178,7 @@ def generate_map() -> str:
         rows = cursor.fetchall()
         conn.close()
 
-    # Агрегируем по районам (берём средний за период)
+    # Агрегируем по районам
     district_stats = defaultdict(lambda: {"coefs": [], "last_time": None})
     for row in rows:
         d = row['district']
@@ -184,192 +186,122 @@ def generate_map() -> str:
         if district_stats[d]["last_time"] is None:
             district_stats[d]["last_time"] = row['timestamp']
 
-    # Создаём карту — центр Москвы
-    m = folium.Map(
-        location=[55.7558, 37.6173],
-        zoom_start=10,
-        tiles="CartoDB dark_matter"  # Тёмная стильная подложка
-    )
-
-    # Добавляем точки
-    points_added = 0
+    # Создаём GeoDataFrame
+    data = []
     for district, stats in district_stats.items():
         if district not in DISTRICT_COORDS:
             continue
-        
         lat, lon = DISTRICT_COORDS[district]
-        avg_coef = statistics.mean(stats["coefs"])
-        color = get_color_by_coefficient(avg_coef)
-        
-        # Размер точки зависит от количества данных
-        radius = 8 + min(len(stats["coefs"]) * 2, 15)
-        
-        folium.CircleMarker(
-            location=[lat, lon],
-            radius=radius,
-            popup=f"{district}<br>Коэффициент: {avg_coef:.2f}x<br>Записей: {len(stats['coefs'])}",
-            tooltip=f"{district}: {avg_coef:.2f}x",
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.7,
-            weight=2
-        ).add_to(m)
-        points_added += 1
+        data.append({
+            'district': district,
+            'coef': statistics.mean(stats["coefs"]),
+            'count': len(stats["coefs"]),
+            'geometry': Point(lon, lat)
+        })
 
-    # Если нет данных вообще — показываем демо-точку
-    if points_added == 0:
-        folium.CircleMarker(
-            location=[55.7614, 37.5650],
-            radius=12,
-            popup="Пресненский<br>Демо: 1.5x",
-            tooltip="Пресненский: 1.5x",
-            color="#f1c40f",
-            fill=True,
-            fill_color="#f1c40f",
-            fill_opacity=0.7,
-            weight=2
-        ).add_to(m)
+    # Если нет данных — демо
+    if not data:
+        data = [{
+            'district': 'Пресненский',
+            'coef': 1.5,
+            'count': 1,
+            'geometry': Point(37.5650, 55.7614)
+        }]
 
-    # Добавляем легенду
-    legend_html = '''
-    <div style="position: fixed; 
-                bottom: 20px; right: 20px; 
-                background-color: rgba(30,30,30,0.9);
-                border: 1px solid #444;
-                border-radius: 8px;
-                padding: 12px;
-                font-size: 13px;
-                color: white;
-                z-index: 9999;
-                font-family: Arial, sans-serif;">
-        <b style="font-size:14px;">Коэффициент</b><br>
-        <span style="color:#2ecc71;">●</span> Низкий (&lt;1.3x)<br>
-        <span style="color:#f1c40f;">●</span> Средний (1.3-1.7x)<br>
-        <span style="color:#e67e22;">●</span> Высокий (1.7-2.1x)<br>
-        <span style="color:#e74c3c;">●</span> Очень высокий (2.1-2.5x)<br>
-        <span style="color:#9b59b6;">●</span> Максимальный (&gt;2.5x)<br>
-        <hr style="border-color:#555;margin:6px 0;">
-        <span style="color:#aaa;font-size:11px;">Обновлено: ''' + datetime.now().strftime('%H:%M') + '''</span>
-    </div>
-    '''
-    m.get_root().html.add_child(folium.Element(legend_html))
+    gdf = gpd.GeoDataFrame(data, crs="EPSG:4326")
+    gdf_mercator = gdf.to_crs(epsg=3857)
 
-    # Сохраняем HTML
-    os.makedirs("maps", exist_ok=True)
-    html_path = "maps/taxi_map.html"
-    m.save(html_path)
+    # Создаём фигуру
+    fig, ax = plt.subplots(figsize=(14, 12))
 
-    # Конвертируем HTML → PNG через selenium (или делаем скриншот через matplotlib)
-    # Пока сохраняем HTML — Telegram может отправлять его как файл, 
-    # но лучше сделать PNG. Для этого используем простой метод:
-    
-    # Метод: рендерим через matplotlib + contextily
-    return _render_map_png(district_stats)
+    # Устанавливаем границы карты (вся Москва + пригороды)
+    # Москва примерно: lon 37.3-37.9, lat 55.5-55.95
+    bounds = gdf_mercator.total_bounds
+    padding = 8000  # метров
+    ax.set_xlim(bounds[0] - padding, bounds[2] + padding)
+    ax.set_ylim(bounds[1] - padding, bounds[3] + padding)
 
+    # Если границы слишком узкие (одна точка) — ставим дефолтные
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    if xlim[1] - xlim[0] < 20000:
+        ax.set_xlim(4170000, 4230000)  # Москва в Web Mercator
+    if ylim[1] - ylim[0] < 20000:
+        ax.set_ylim(7470000, 7530000)
 
-def _render_map_png(district_stats) -> str:
-    """Рендерит карту в PNG через matplotlib с подложкой"""
+    # Рисуем подложку (тёмная тема)
     try:
-        import contextily as ctx
-        import geopandas as gpd
-        from shapely.geometry import Point
-        
-        # Создаём GeoDataFrame
-        data = []
-        for district, stats in district_stats.items():
-            if district not in DISTRICT_COORDS:
-                continue
-            lat, lon = DISTRICT_COORDS[district]
-            data.append({
-                'district': district,
-                'lat': lat,
-                'lon': lon,
-                'coef': statistics.mean(stats["coefs"]),
-                'count': len(stats["coefs"]),
-                'geometry': Point(lon, lat)  # GeoPandas: x=lon, y=lat
-            })
-        
-        if not data:
-            # Демо-данные
-            data = [{
-                'district': 'Пресненский',
-                'lat': 55.7614,
-                'lon': 37.5650,
-                'coef': 1.5,
-                'count': 1,
-                'geometry': Point(37.5650, 55.7614)
-            }]
-        
-        gdf = gpd.GeoDataFrame(data, crs="EPSG:4326")
-        # Переводим в метры для contextily
-        gdf_mercator = gdf.to_crs(epsg=3857)
-        
-        fig, ax = plt.subplots(figsize=(12, 10))
-        
-        # Рисуем подложку
-        try:
-            ctx.add_basemap(ax, crs=gdf_mercator.crs.to_string(), 
-                          source=ctx.providers.CartoDB.DarkMatter,
-                          zoom=10)
-        except Exception:
-            # Fallback — просто фон
-            ax.set_facecolor('#1a1a2e')
-        
-        # Рисуем точки
-        for idx, row in gdf_mercator.iterrows():
-            color = get_color_by_coefficient(row['coef'])
-            size = 200 + row['count'] * 80
-            
-            ax.scatter(row.geometry.x, row.geometry.y, 
-                      s=size, c=color, alpha=0.7, 
-                      edgecolors='white', linewidths=1.5, zorder=5)
-            
-            # Подпись района
-            ax.annotate(f"{row['district']}\n{row['coef']:.1f}x",
-                       xy=(row.geometry.x, row.geometry.y),
-                       xytext=(8, 8), textcoords='offset points',
-                       fontsize=9, color='white', fontweight='bold',
-                       bbox=dict(boxstyle='round,pad=0.3', 
-                                facecolor='black', alpha=0.6, edgecolor='none'))
-        
-        # Настройки
-        ax.set_xlim(gdf_mercator.geometry.x.min() - 5000, gdf_mercator.geometry.x.max() + 5000)
-        ax.set_ylim(gdf_mercator.geometry.y.min() - 5000, gdf_mercator.geometry.y.max() + 5000)
-        ax.set_aspect('equal')
-        ax.axis('off')
-        
-        # Заголовок
-        now = datetime.now()
-        fig.suptitle(f'Актуальная карта спроса такси в Москве\n(за последние 30 минут) {now.strftime("%d.%m.%Y %H:%M")}',
-                    fontsize=14, color='white', fontweight='bold', y=0.98)
-        
-        # Легенда
-        legend_elements = [
-            mpatches.Patch(facecolor='#2ecc71', edgecolor='white', label='Низкий (<1.3x)'),
-            mpatches.Patch(facecolor='#f1c40f', edgecolor='white', label='Средний (1.3-1.7x)'),
-            mpatches.Patch(facecolor='#e67e22', edgecolor='white', label='Высокий (1.7-2.1x)'),
-            mpatches.Patch(facecolor='#e74c3c', edgecolor='white', label='Очень высокий (2.1-2.5x)'),
-            mpatches.Patch(facecolor='#9b59b6', edgecolor='white', label='Максимальный (>2.5x)'),
-        ]
-        ax.legend(handles=legend_elements, loc='upper right', 
-                 facecolor='#1a1a2e', edgecolor='#444', labelcolor='white',
-                 fontsize=10)
-        
-        plt.tight_layout()
-        
-        os.makedirs("maps", exist_ok=True)
-        png_path = "maps/taxi_map.png"
-        plt.savefig(png_path, dpi=150, bbox_inches='tight', 
-                   facecolor='#1a1a2e', edgecolor='none')
-        plt.close()
-        
-        return png_path
-        
+        ctx.add_basemap(
+            ax,
+            crs=gdf_mercator.crs.to_string(),
+            source=ctx.providers.CartoDB.DarkMatter,
+            zoom=10,
+            alpha=0.9
+        )
     except Exception as e:
-        print(f"Ошибка рендера карты: {e}")
-        # Fallback — возвращаем путь к HTML
-        return "maps/taxi_map.html"
+        print(f"Ошибка подложки: {e}")
+        ax.set_facecolor('#1a1a2e')
+
+    # Рисуем точки
+    for idx, row in gdf_mercator.iterrows():
+        color = get_color_by_coefficient(row['coef'])
+        size = 300 + row['count'] * 150
+        
+        ax.scatter(
+            row.geometry.x, row.geometry.y,
+            s=size, c=color, alpha=0.85,
+            edgecolors='white', linewidths=2,
+            zorder=5
+        )
+        
+        # Подпись
+        ax.annotate(
+            f"{row['district']}\n{row['coef']:.1f}x",
+            xy=(row.geometry.x, row.geometry.y),
+            xytext=(12, 12), textcoords='offset points',
+            fontsize=9, color='white', fontweight='bold',
+            bbox=dict(boxstyle='round,pad=0.4', facecolor='black', 
+                     alpha=0.75, edgecolor='none'),
+            zorder=6
+        )
+
+    # Настройки
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+    # Заголовок
+    now = datetime.now()
+    fig.suptitle(
+        f'Актуальная карта спроса такси в Москве\n(за последние 30 минут) {now.strftime("%d.%m.%Y %H:%M")}',
+        fontsize=15, color='white', fontweight='bold', y=0.98
+    )
+
+    # Легенда
+    legend_elements = [
+        mpatches.Patch(facecolor='#2ecc71', edgecolor='white', label='Низкий (<1.3x)'),
+        mpatches.Patch(facecolor='#f1c40f', edgecolor='white', label='Средний (1.3-1.7x)'),
+        mpatches.Patch(facecolor='#e67e22', edgecolor='white', label='Высокий (1.7-2.1x)'),
+        mpatches.Patch(facecolor='#e74c3c', edgecolor='white', label='Очень высокий (2.1-2.5x)'),
+        mpatches.Patch(facecolor='#9b59b6', edgecolor='white', label='Максимальный (>2.5x)'),
+    ]
+    ax.legend(
+        handles=legend_elements, loc='upper left',
+        facecolor='#1a1a2e', edgecolor='#444',
+        labelcolor='white', fontsize=10,
+        framealpha=0.9
+    )
+
+    plt.tight_layout()
+
+    os.makedirs("maps", exist_ok=True)
+    png_path = "maps/taxi_map.png"
+    plt.savefig(
+        png_path, dpi=150, bbox_inches='tight',
+        facecolor='#0d0d0d', edgecolor='none'
+    )
+    plt.close()
+
+    return png_path
 
 
 def get_district_forecast(district: str) -> str:
