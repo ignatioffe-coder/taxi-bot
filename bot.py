@@ -24,8 +24,9 @@ dp = Dispatcher()
 
 def get_weather():
     """Получение реальной погоды в Москве через wttr.in"""
+    import requests
+    
     try:
-        import requests
         url = "https://wttr.in/Moscow?format=%C+%t&lang=ru"
         response = requests.get(url, timeout=5)
         
@@ -36,17 +37,17 @@ def get_weather():
             weather_map = {
                 "Clear": "☀️ Ясно",
                 "Sunny": "☀️ Солнечно",
-                "Partly cloudy": "🌤️ Переменная облачность",
+                "Partly cloudy": "⛅ Переменная облачность",
                 "Cloudy": "☁️ Облачно",
                 "Overcast": "☁️ Пасмурно",
                 "Rain": "🌧️ Дождь",
-                "Light rain": "🌧️ Небольшой дождь",
+                "Light rain": "🌦️ Небольшой дождь",
                 "Heavy rain": "🌧️ Сильный дождь",
                 "Rain, Thunderstorm": "⛈️ Гроза с дождём",
                 "Thunderstorm": "⛈️ Гроза",
                 "Light Rain With Thunderstorm": "⛈️ Гроза с дождём",
                 "Snow": "❄️ Снег",
-                "Light snow": "❄️ Небольшой снег",
+                "Light snow": "🌨️ Небольшой снег",
                 "Heavy snow": "❄️ Сильный снег",
                 "Fog": "🌫️ Туман",
                 "Mist": "🌫️ Дымка"
@@ -54,13 +55,15 @@ def get_weather():
             
             # Ищем соответствие
             for eng, rus in weather_map.items():
-                if eng.lower() in text.lower():
+                if eng in text:
                     return rus
             
-            # Если не нашли, возвращаем как есть
-            return text.split()[0] if text else "☀️ Ясно"
+            return f"🌡️ {text}"  # Если не нашли перевод — возвращаем как есть
+        else:
+            return "🌡️ Погода недоступна"
+            
     except Exception as e:
-        logger.warning(f"Ошибка получения погоды: {e}")
+        return "🌡️ Погода недоступна"
     
     # Запасной вариант на основе времени суток
     hour = datetime.now().hour
