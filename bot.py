@@ -14,6 +14,7 @@ import config
 import database
 import analytics
 import heatmap
+from traffic_analyzer import get_traffic_report, TrafficAnalyzer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,18 +23,17 @@ bot = Bot(token=config.BOT_TOKEN)
 dp = Dispatcher()
 
 
-def get_weather():
+def get_weather() -> str:
     """Получение реальной погоды в Москве через wttr.in"""
     import requests
-    
+
     try:
         url = "https://wttr.in/Moscow?format=%C+%t&lang=ru"
         response = requests.get(url, timeout=5)
-        
+
         if response.status_code == 200:
             text = response.text.strip()
-            
-            # Словарь для перевода погодных условий на русский с эмодзи
+
             weather_map = {
                 "Clear": "☀️ Ясно",
                 "Sunny": "☀️ Солнечно",
@@ -50,52 +50,47 @@ def get_weather():
                 "Light snow": "🌨️ Небольшой снег",
                 "Heavy snow": "❄️ Сильный снег",
                 "Fog": "🌫️ Туман",
-                "Mist": "🌫️ Дымка"
+                "Mist": "🌫️ Дымка",
             }
-            
-            # Ищем соответствие
+
             for eng, rus in weather_map.items():
-                if eng in text:
+                if eng.lower() in text.lower():
                     return rus
-            
-            return f"🌡️ {text}"  # Если не нашли перевод — возвращаем как есть
-        else:
-            return "🌡️ Погода недоступна"
-            
-    except Exception as e:
+
+            return f"🌡️ {text}"
         return "🌡️ Погода недоступна"
-    
-    # Запасной вариант на основе времени суток
-    hour = datetime.now().hour
-    if 6 <= hour < 12:
-        return "🌅 Утро"
-    elif 12 <= hour < 18:
-        return "☀️ День"
-    elif 18 <= hour < 23:
-        return "🌙 Вечер"
-    else:
+
+    except Exception:
+        # Запасной вариант на основе времени суток
+        hour = datetime.now().hour
+        if 6 <= hour < 12:
+            return "🌅 Утро"
+        elif 12 <= hour < 18:
+            return "☀️ День"
+        elif 18 <= hour < 23:
+            return "🌙 Вечер"
         return "🌙 Ночь"
 
 
-def get_main_keyboard():
+def get_main_keyboard() -> ReplyKeyboardMarkup:
     kb = [
         [KeyboardButton(text="📊 Рекомендации сейчас")],
         [KeyboardButton(text="📍 Прислать коэффициент")],
         [KeyboardButton(text="📈 Моя статистика")],
         [KeyboardButton(text="🏆 Топ моменты")],
         [KeyboardButton(text="🗺️ Карта спроса")],
+        [KeyboardButton(text="🚗 Пробки")],
         [KeyboardButton(text="🌡️ Погода")],
-        [KeyboardButton(text="❓ Помощь")]
+        [KeyboardButton(text="❓ Помощь")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
-def get_districts_keyboard():
+def get_districts_keyboard() -> ReplyKeyboardMarkup:
     districts = config.MOSCOW_DISTRICTS
     kb = []
     for i in range(0, len(districts), 2):
-        row = []
-        row.append(KeyboardButton(text=districts[i]))
+        row = [KeyboardButton(text=districts[i])]
         if i + 1 < len(districts):
             row.append(KeyboardButton(text=districts[i + 1]))
         kb.append(row)
@@ -103,25 +98,25 @@ def get_districts_keyboard():
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
-def get_weather_keyboard():
+def get_weather_keyboard() -> ReplyKeyboardMarkup:
     kb = [
         [KeyboardButton(text="☀️ Ясно"), KeyboardButton(text="🌤️ Облачно")],
         [KeyboardButton(text="🌧️ Дождь"), KeyboardButton(text="❄️ Снег")],
         [KeyboardButton(text="🌫️ Туман"), KeyboardButton(text="🌩️ Гроза")],
-        [KeyboardButton(text="⏩ Пропустить")]
+        [KeyboardButton(text="⏩ Пропустить")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
-def get_confirm_keyboard():
+def get_confirm_keyboard() -> ReplyKeyboardMarkup:
     kb = [
         [KeyboardButton(text="✅ Всё верно")],
-        [KeyboardButton(text="❌ Изменить")]
+        [KeyboardButton(text="❌ Изменить")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
-user_temp_data = {}
+user_temp_data: dict = {}
 
 
 @dp.message(Command("start"))
@@ -153,6 +148,7 @@ async def cmd_help(message: types.Message):
         "📈 Моя статистика — сколько данных ты прислал\n\n"
         "🏆 Топ моменты — лучшие коэффициенты за всё время\n\n"
         "🗺️ Карта спроса — визуальная карта высокого спроса\n\n"
+        "🚗 Пробки — текущая ситуация с пробками\n\n"
         "🌡️ Погода — узнать погоду в Москве\n\n"
         "💡 Советы:\n"
         "• Присылай данные регулярно — хотя бы раз в час\n"
@@ -183,20 +179,25 @@ async def cmd_admin(message: types.Message):
     await message.answer(report)
 
 
+@dp.message(Command("traffic"))
+async def cmd_traffic(message: types.Message):
+    await message.answer("🚗 Анализирую пробки...")
+    try:
+        text = get_traffic_report()
+        await message.answer(text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Ошибка анализа пробок: {e}")
+        await message.answer("❌ Не удалось получить данные о пробках. Попробуй позже.")
+
+
 @dp.message(F.text == "📊 Рекомендации сейчас")
 async def recommendations_handler(message: types.Message):
     await message.answer("⏳ Анализирую данные...")
-    
-    # Получаем погоду
+
     weather = get_weather()
-    
-    # Основные рекомендации
     text = analytics.get_current_recommendations()
-    
-    # Добавляем погоду
     full_text = f"🌡️ {weather}\n\n{text}"
-    
-    # Добавляем совет по погоде
+
     if "дождь" in weather.lower() or "гроза" in weather.lower():
         full_text += "\n\n💡 Совет: Из-за дождя спрос выше обычного! 👍"
     elif "снег" in weather.lower():
@@ -205,7 +206,7 @@ async def recommendations_handler(message: types.Message):
         full_text += "\n\n💡 Совет: Хорошая погода = больше поездок по городу ☀️"
     elif "ночь" in weather.lower():
         full_text += "\n\n💡 Совет: Ночью аэропорты и клубы дают высокие коэффициенты 🌙"
-    
+
     await message.answer(full_text, reply_markup=get_main_keyboard())
 
 
@@ -222,18 +223,19 @@ async def send_coefficient_start(message: types.Message):
 @dp.message(F.text == "📈 Моя статистика")
 async def my_stats_handler(message: types.Message):
     stats = database.get_user_stats(message.from_user.id)
-    if not stats or stats.get('total_records', 0) == 0:
+    if not stats or stats.get("total_records", 0) == 0:
         await message.answer(
             "📊 Ты пока не присылал коэффициентов.\n\n"
             "Нажми «Прислать коэффициент», чтобы начать!",
-            reply_markup=get_main_keyboard()
+            reply_markup=get_main_keyboard(),
         )
         return
 
+    avg_coef = stats.get("avg_coef") or 0
     text = (
         f"📈 Твоя статистика\n\n"
         f"📝 Всего записей: {stats['total_records']}\n"
-        f"📈 Средний коэффициент: {round(stats['avg_coef'], 2)}x\n"
+        f"📈 Средний коэффициент: {round(avg_coef, 2)}x\n"
         f"🕐 Последняя запись: {stats['last_record']}\n\n"
         f"💡 Присылай данные чаще — помогаешь себе и коллегам!"
     )
@@ -249,23 +251,22 @@ async def top_moments_handler(message: types.Message):
 @dp.message(F.text == "🗺️ Карта спроса")
 async def map_handler(message: types.Message):
     await message.answer("🗺️ Генерирую карту спроса... Подождите секунду...")
-    
+
     try:
-        # Генерируем карту
         img_buf = heatmap.generate_map()
-        
-        # Отправляем как фото
         photo = BufferedInputFile(img_buf.getvalue(), filename="demand_map.png")
-        
+
         await message.answer_photo(
-            photo, 
-            caption="🗺️ Карта спроса такси в Москве\n\n"
-                    "🟢 Зелёный — низкий (<1.3x)\n"
-                    "🟡 Жёлтый — средний (1.3-1.7x)\n"
-                    "🟠 Оранжевый — высокий (1.7-2.1x)\n"
-                    "🔴 Красный — очень высокий (2.1-2.5x)\n"
-                    "🟣 Фиолетовый — максимальный (>2.5x)",
-            reply_markup=get_main_keyboard()
+            photo,
+            caption=(
+                "🗺️ Карта спроса такси в Москве\n\n"
+                "🟢 Зелёный — низкий (<1.3x)\n"
+                "🟡 Жёлтый — средний (1.3-1.7x)\n"
+                "🟠 Оранжевый — высокий (1.7-2.1x)\n"
+                "🔴 Красный — очень высокий (2.1-2.5x)\n"
+                "🟣 Фиолетовый — максимальный (>2.5x)"
+            ),
+            reply_markup=get_main_keyboard(),
         )
     except Exception as e:
         logger.error(f"Ошибка при создании карты: {e}")
@@ -275,8 +276,13 @@ async def map_handler(message: types.Message):
             "• Недостаточно данных в базе\n"
             "• Ошибка библиотек\n\n"
             "Попробуйте позже, когда накопится больше данных.",
-            reply_markup=get_main_keyboard()
+            reply_markup=get_main_keyboard(),
         )
+
+
+@dp.message(F.text == "🚗 Пробки")
+async def traffic_button(message: types.Message):
+    await cmd_traffic(message)
 
 
 @dp.message(F.text == "🌡️ Погода")
@@ -318,7 +324,7 @@ async def state_handler(message: types.Message):
         await message.answer(
             f"📍 Район: {district}\n\n"
             f"Теперь введи текущий коэффициент (только число, например: 1.3 или 2.0)",
-            reply_markup=ReplyKeyboardRemove()
+            reply_markup=ReplyKeyboardRemove(),
         )
         return
 
@@ -336,7 +342,7 @@ async def state_handler(message: types.Message):
             await message.answer(
                 f"✅ Коэффициент: {coef}x\n\n"
                 f"Какая сейчас погода? (это помогает точности прогнозов)",
-                reply_markup=get_weather_keyboard()
+                reply_markup=get_weather_keyboard(),
             )
             return
 
@@ -349,7 +355,7 @@ async def state_handler(message: types.Message):
         if weather == "⏩ Пропустить":
             weather = ""
         elif weather in ["☀️ Ясно", "🌤️ Облачно", "🌧️ Дождь", "❄️ Снег", "🌫️ Туман", "🌩️ Гроза"]:
-            weather = weather[2:]  # убираем эмодзи
+            weather = weather[2:].strip()  # убираем эмодзи
 
         data["weather"] = weather
         data["step"] = "confirm"
@@ -367,17 +373,16 @@ async def state_handler(message: types.Message):
 
     if step == "confirm":
         if message.text == "✅ Всё верно":
-            # Если погода не была указана вручную, подставляем автоматическую
             weather_value = data.get("weather", "")
             if not weather_value:
                 weather_value = get_weather()
-            
+
             success = database.add_coefficient(
                 user_id=user_id,
                 username=message.from_user.username or "",
                 district=data["district"],
                 coefficient=data["coefficient"],
-                weather=weather_value
+                weather=weather_value,
             )
 
             if success:
@@ -385,12 +390,12 @@ async def state_handler(message: types.Message):
                 await message.answer(
                     f"✅ Сохранено!\n\n"
                     f"Спасибо за данные! Вот что я знаю об этом районе:\n\n{forecast}",
-                    reply_markup=get_main_keyboard()
+                    reply_markup=get_main_keyboard(),
                 )
             else:
                 await message.answer(
                     "❌ Ошибка сохранения. Попробуй ещё раз.",
-                    reply_markup=get_main_keyboard()
+                    reply_markup=get_main_keyboard(),
                 )
 
             del user_temp_data[user_id]
@@ -400,7 +405,7 @@ async def state_handler(message: types.Message):
             user_temp_data[user_id] = data
             await message.answer(
                 "Ок, начнём заново. Выбери район:",
-                reply_markup=get_districts_keyboard()
+                reply_markup=get_districts_keyboard(),
             )
         return
 
@@ -412,20 +417,20 @@ async def any_text_handler(message: types.Message):
         if 0.5 <= coef <= 5.0:
             user_temp_data[message.from_user.id] = {
                 "step": "district",
-                "coefficient": coef
+                "coefficient": coef,
             }
             await message.answer(
                 f"Похоже, ты прислал коэффициент {coef}x\n\n"
                 f"Теперь выбери район:",
-                reply_markup=get_districts_keyboard()
+                reply_markup=get_districts_keyboard(),
             )
             return
-    except ValueError:
+    except (ValueError, TypeError):
         pass
 
     await message.answer(
         "Не понял команду. Используй кнопки ниже или /help",
-        reply_markup=get_main_keyboard()
+        reply_markup=get_main_keyboard(),
     )
 
 
@@ -440,77 +445,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-# Добавьте в bot.py новые обработчики
-
-@dp.message(Command("traffic"))
-async def traffic_forecast(message: types.Message):
-    """Прогноз пробок"""
-    await message.answer("🚗 Анализирую пробки...")
-    text = analytics.get_traffic_forecast()
-    await message.answer(text, parse_mode='Markdown')
-
-
-@dp.message(Command("district_traffic"))
-async def district_traffic_handler(message: types.Message):
-    """Анализ пробок по району"""
-    # Просим ввести район
-    await message.answer("Введите район Москвы (например: Центр (Тверская, Арбат), Курский вокзал, Аэропорт):")
-    
-    @dp.message(lambda m: m.text and not m.text.startswith('/'))
-    async def get_district(m):
-        text = analytics.get_district_traffic(m.text)
-        await m.answer(text, parse_mode='Markdown')
-
-
-# Добавьте кнопку в главное меню
-def get_main_keyboard():
-    kb = [
-        [KeyboardButton(text="📊 Рекомендации сейчас")],
-        [KeyboardButton(text="📍 Прислать коэффициент")],
-        [KeyboardButton(text="📈 Моя статистика")],
-        [KeyboardButton(text="🏆 Топ моменты")],
-        [KeyboardButton(text="🗺️ Карта спроса")],
-        [KeyboardButton(text="🚗 Пробки")],  # Новая кнопка
-        [KeyboardButton(text="📊 Прогноз пробок")],  # Новая кнопка
-        [KeyboardButton(text="🚕 Mini App")],
-        [KeyboardButton(text="🌡️ Погода")],
-        [KeyboardButton(text="❓ Помощь")]
-    ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-
-
-# Обработчики новых кнопок
-@dp.message(F.text == "🚗 Пробки")
-async def traffic_button(message: types.Message):
-    await traffic_forecast(message)
-
-
-@dp.message(F.text == "📊 Прогноз пробок")
-async def traffic_forecast_button(message: types.Message):
-    await traffic_forecast(message)
-
-@dp.message(F.text == "📈 Моя статистика")
-async def my_stats_handler(message: types.Message):
-    user_id = message.from_user.id
-    print(f"DEBUG: Запрос статистики от user_id={user_id}")
-    
-    stats = database.get_user_stats(user_id)
-    print(f"DEBUG: stats = {stats}")
-    
-    if not stats or stats.get('total_records', 0) == 0:
-        await message.answer(
-            "📊 Ты пока не присылал коэффициентов.\n\n"
-            "Нажми «Прислать коэффициент», чтобы начать!",
-            reply_markup=get_main_keyboard()
-        )
-        return
-
-    text = (
-        f"📈 Твоя статистика\n\n"
-        f"📝 Всего записей: {stats['total_records']}\n"
-        f"📈 Средний коэффициент: {stats['avg_coef']}x\n"
-        f"🕐 Последняя запись: {stats['last_record']}\n\n"
-        f"💡 Присылай данные чаще — помогаешь себе и коллегам!"
-    )
-    await message.answer(text, reply_markup=get_main_keyboard())
