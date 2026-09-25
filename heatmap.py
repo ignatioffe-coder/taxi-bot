@@ -7,10 +7,13 @@ import io
 import sqlite3
 from datetime import datetime, timedelta
 
-# Функция для московского времени
+import config
+
+
 def get_moscow_time():
     """Возвращает московское время (UTC+3)"""
     return datetime.now() + timedelta(hours=3)
+
 
 # Координаты районов Москвы
 DISTRICTS_COORDS = {
@@ -34,9 +37,9 @@ MAP_BOUNDS = {
 
 def get_district_coefficients():
     """Получает средние коэффициенты по районам из БД"""
-    conn = sqlite3.connect('taxi_data.db')
+    conn = sqlite3.connect(config.DB_PATH)
     cursor = conn.cursor()
-    
+
     try:
         cursor.execute("""
             SELECT district, AVG(coefficient) as avg_coef, COUNT(*) as count
@@ -48,46 +51,46 @@ def get_district_coefficients():
     except Exception as e:
         print(f"Ошибка БД: {e}")
         results = []
-    
-    conn.close()
-    
+    finally:
+        conn.close()
+
     coefs = {}
     for row in results:
         coefs[row[0]] = round(row[1], 1)
-    
+
     return coefs
 
 
 def create_demand_map():
     """Создаёт карту спроса"""
     coefs = get_district_coefficients()
-    
+
     if not coefs:
         fig, ax = plt.subplots(figsize=(10, 8))
-        ax.text(0.5, 0.5, "Нет данных о коэффициентах\n\nНажмите «Прислать коэффициент»", 
+        ax.text(0.5, 0.5, "Нет данных о коэффициентах\n\nНажмите «Прислать коэффициент»",
                 ha='center', va='center', fontsize=14)
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         ax.axis('off')
-        
+
         buf = io.BytesIO()
         plt.savefig(buf, format='png', dpi=100)
         buf.seek(0)
         plt.close()
         return buf
-    
+
     fig, ax = plt.subplots(figsize=(12, 10))
-    
+
     # Рисуем МКАД
-    mкад = plt.Circle((37.62, 55.75), 0.35, fill=False, edgecolor='gray', linewidth=1.5, linestyle='--')
-    ax.add_patch(mкад)
-    
+    mkad = plt.Circle((37.62, 55.75), 0.35, fill=False, edgecolor='gray', linewidth=1.5, linestyle='--')
+    ax.add_patch(mkad)
+
     for district, coef in coefs.items():
         if district not in DISTRICTS_COORDS:
             continue
-            
+
         coords = DISTRICTS_COORDS[district]
-        
+
         if coef < 1.3:
             color = '#2ecc71'
             marker = 'o'
@@ -108,22 +111,21 @@ def create_demand_map():
             color = '#8e44ad'
             marker = '*'
             size = 800
-        
-        ax.scatter(coords[1], coords[0], s=size, c=color, alpha=0.7, 
-                  edgecolors='black', linewidth=1.5, marker=marker, zorder=5)
-        ax.annotate(f"{district}\n{coef}x", 
-                   (coords[1], coords[0]),
-                   ha='center', va='center',
-                   fontsize=8, fontweight='bold', zorder=6)
-    
+
+        ax.scatter(coords[1], coords[0], s=size, c=color, alpha=0.7,
+                   edgecolors='black', linewidth=1.5, marker=marker, zorder=5)
+        ax.annotate(f"{district}\n{coef}x",
+                    (coords[1], coords[0]),
+                    ha='center', va='center',
+                    fontsize=8, fontweight='bold', zorder=6)
+
     ax.set_xlim(MAP_BOUNDS['min_lon'], MAP_BOUNDS['max_lon'])
     ax.set_ylim(MAP_BOUNDS['min_lat'], MAP_BOUNDS['max_lat'])
     ax.set_xlabel('Долгота', fontsize=12)
     ax.set_ylabel('Широта', fontsize=12)
-    
-    # ИСПРАВЛЕНО: используется московское время
+
     ax.set_title(f'Карта спроса такси в Москве\n{get_moscow_time().strftime("%d.%m.%Y %H:%M")}', fontsize=12)
-    
+
     legend_elements = [
         plt.scatter([], [], s=100, c='#2ecc71', marker='o', label='Низкий (<1.3x)'),
         plt.scatter([], [], s=100, c='#f1c40f', marker='s', label='Средний (1.3-1.7x)'),
@@ -133,12 +135,12 @@ def create_demand_map():
     ]
     ax.legend(handles=legend_elements, loc='upper right', fontsize=9)
     ax.grid(True, alpha=0.2)
-    
+
     buf = io.BytesIO()
     plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', facecolor='white')
     buf.seek(0)
     plt.close()
-    
+
     return buf
 
 
