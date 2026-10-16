@@ -2,17 +2,29 @@
 Генератор карты спроса для Москвы
 """
 
-import matplotlib.pyplot as plt
 import io
 import sqlite3
-from datetime import datetime, timedelta
+import threading
+
+import matplotlib
+
+# ИСПРАВЛЕНО: без явного бэкенда matplotlib выбирает GUI (TkAgg), а карта
+# рисуется в рабочем потоке — это даёт «Starting a Matplotlib GUI outside of
+# the main thread» и падение при завершении. Боту нужен только PNG.
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 
 import config
 
+# pyplot хранит состояние глобально и не потокобезопасен, а генерация карты
+# выполняется в отдельном потоке (bot.py) — сериализуем её.
+_map_lock = threading.Lock()
+
 
 def get_moscow_time():
-    """Возвращает московское время (UTC+3)"""
-    return datetime.now() + timedelta(hours=3)
+    """Возвращает текущее московское время (UTC+3)"""
+    return config.get_moscow_time()
 
 
 # Координаты районов Москвы
@@ -145,4 +157,5 @@ def create_demand_map():
 
 
 def generate_map():
-    return create_demand_map()
+    with _map_lock:
+        return create_demand_map()

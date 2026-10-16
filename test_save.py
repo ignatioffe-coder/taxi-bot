@@ -1,5 +1,4 @@
 import sqlite3
-from datetime import datetime
 import config
 
 
@@ -7,14 +6,16 @@ def test_save():
     conn = sqlite3.connect(config.DB_PATH)
     cursor = conn.cursor()
 
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    # ИСПРАВЛЕНО: пишем московское время — так же, как это делает database.py
+    now_dt = config.get_moscow_time()
+    now = now_dt.strftime('%Y-%m-%d %H:%M:%S')
 
     try:
         cursor.execute("""
             INSERT INTO coefficients (user_id, username, district, coefficient, weather, day_of_week, hour, timestamp, notes)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (7925732814, "test_user", "Тестовый район", 2.5, "ясно",
-              datetime.now().weekday(), datetime.now().hour, now, ""))
+              now_dt.weekday(), now_dt.hour, now, ""))
 
         conn.commit()
         print("✅ Тестовая запись успешно добавлена!")

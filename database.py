@@ -1,14 +1,13 @@
 """Работа с базой данных"""
 
 import sqlite3
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict
 import config
 
 
 def get_moscow_time():
     """Возвращает текущее московское время (UTC+3)"""
-    return datetime.now() + timedelta(hours=3)
+    return config.get_moscow_time()
 
 
 def init_db():
@@ -60,6 +59,7 @@ def init_db():
 def add_coefficient(user_id: int, username: str, district: str, 
                     coefficient: float, weather: str = "", notes: str = "") -> bool:
     """Добавляет запись о коэффициенте"""
+    conn = None
     try:
         now = get_moscow_time()  # ← ИСПРАВЛЕНО: московское время
         conn = sqlite3.connect(config.DB_PATH)
@@ -71,23 +71,34 @@ def add_coefficient(user_id: int, username: str, district: str,
         """, (user_id, username, district, coefficient, weather, 
               now.weekday(), now.hour, notes, now.strftime('%Y-%m-%d %H:%M:%S')))
         conn.commit()
-        conn.close()
         return True
     except Exception as e:
         print(f"Ошибка добавления коэффициента: {e}")
         return False
+    finally:
+        # ИСПРАВЛЕНО: раньше при ошибке соединение оставалось открытым
+        if conn is not None:
+            conn.close()
 
 
 def add_user(user_id: int, username: str, first_name: str, last_name: str):
-    """Добавляет или обновляет пользователя"""
+    """Добавляет или обновляет пользователя (не трогая joined_at и is_active)"""
     conn = sqlite3.connect(config.DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT OR REPLACE INTO users (user_id, username, first_name, last_name)
-        VALUES (?, ?, ?, ?)
-    """, (user_id, username, first_name, last_name))
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        # ИСПРАВЛЕНО: INSERT OR REPLACE удалял строку и создавал новую,
+        # из-за чего при каждом /start сбрасывались joined_at и is_active.
+        cursor.execute("""
+            INSERT INTO users (user_id, username, first_name, last_name)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username = excluded.username,
+                first_name = excluded.first_name,
+                last_name = excluded.last_name
+        """, (user_id, username, first_name, last_name))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_stats_by_district(district: str, limit: int = 50) -> List[Dict]:

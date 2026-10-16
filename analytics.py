@@ -2,12 +2,19 @@
 
 import sqlite3
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple
+from typing import Optional, Tuple
 from collections import defaultdict
+import re
 import statistics
 import config
 
 # === ДЛЯ КАРТЫ ===
+import matplotlib
+
+# ИСПРАВЛЕНО: явный не-GUI бэкенд — иначе на машине с tkinter matplotlib
+# пытается рисовать через TkAgg (в потоке это падает).
+matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
@@ -71,6 +78,15 @@ MOSCOW_BOUNDS = {
     'west': 37.25,
     'east': 37.95
 }
+
+
+def escape_markdown(text: str) -> str:
+    """Экранирует пользовательский текст для parse_mode="Markdown".
+
+    Название района водитель может ввести руками (например «Другой»),
+    и символы _ * ` [ ] сломали бы разметку сообщения.
+    """
+    return re.sub(r'([_*`\[\]])', r'\\\1', str(text))
 
 
 def get_color_by_coefficient(coef: float) -> str:
@@ -159,13 +175,14 @@ def generate_map() -> str:
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
-    thirty_mins_ago = datetime.now() - timedelta(minutes=30)
+    # ИСПРАВЛЕНО: время берём московское — в БД timestamp тоже московский
+    thirty_mins_ago = config.moscow_time_str(timedelta(minutes=-30))
     cursor.execute("""
         SELECT district, coefficient, timestamp
         FROM coefficients 
         WHERE timestamp > ?
         ORDER BY timestamp DESC
-    """, (thirty_mins_ago.strftime('%Y-%m-%d %H:%M:%S'),))
+    """, (thirty_mins_ago,))
 
     rows = cursor.fetchall()
     conn.close()
@@ -249,7 +266,7 @@ def generate_map() -> str:
     ax.spines['left'].set_color('white')
     ax.spines['right'].set_color('white')
 
-    now = datetime.now()
+    now = config.get_moscow_time()
     ax.set_title(f'Актуальная карта спроса такси в Москве\n(за последние 30 минут) {now.strftime("%d.%m.%Y %H:%M")}',
                  fontsize=14, color='white', fontweight='bold', pad=20)
 
@@ -277,9 +294,13 @@ def generate_map() -> str:
 
 def get_current_recommendations() -> str:
     """Возвращает текущие рекомендации на основе исторических данных"""
-    now = datetime.now()
+    # ИСПРАВЛЕНО: раньше здесь было datetime.now() (локальное время сервера),
+    # а записи в БД хранятся по Москве — на сервере в UTC рекомендации
+    # сдвигались на 3 часа и попадали не в тот час пик.
+    now = config.get_moscow_time()
     current_hour = now.hour
     current_dow = now.weekday()
+    month_ago = config.moscow_time_str(timedelta(days=-30))
 
     conn = sqlite3.connect(config.DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -290,9 +311,9 @@ def get_current_recommendations() -> str:
         FROM coefficients 
         WHERE day_of_week = ? 
           AND hour BETWEEN ? AND ?
-          AND timestamp > datetime('now', '-30 days')
+          AND timestamp > ?
         ORDER BY timestamp DESC
-    """, (current_dow, max(0, current_hour - 2), min(23, current_hour + 2)))
+    """, (current_dow, max(0, current_hour - 2), min(23, current_hour + 2), month_ago))
 
     rows = cursor.fetchall()
     conn.close()
@@ -324,7 +345,7 @@ def get_current_recommendations() -> str:
     for i, rec in enumerate(recommendations[:7], 1):
         stars = "⭐" * min(int(rec['avg_coefficient']), 3)
         text += (
-            f"{i}. *{rec['district']}*\n"
+            f"{i}. *{escape_markdown(rec['district'])}*\n"
             f"   Средний коэф: *{rec['avg_coefficient']}x* {stars}\n"
             f"   Максимум: {rec['max']}x | Записей: {rec['data_points']}\n"
             f"   Надёжность: {rec['reliability']}%\n\n"
@@ -340,8 +361,9 @@ def get_current_recommendations() -> str:
 
 def get_district_forecast(district: str) -> str:
     """Прогноз по конкретному району на сегодня"""
-    now = datetime.now()
+    now = config.get_moscow_time()
     current_dow = now.weekday()
+    month_ago = config.moscow_time_str(timedelta(days=-30))
 
     conn = sqlite3.connect(config.DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -351,21 +373,23 @@ def get_district_forecast(district: str) -> str:
         SELECT hour, coefficient, day_of_week, timestamp
         FROM coefficients 
         WHERE district = ? 
-          AND timestamp > datetime('now', '-30 days')
+          AND timestamp > ?
         ORDER BY hour
-    """, (district,))
+    """, (district, month_ago))
 
     rows = cursor.fetchall()
     conn.close()
 
+    safe_district = escape_markdown(district)
+
     if len(rows) < config.MIN_DATA_POINTS:
-        return f"📊 По району *{district}* пока мало данных ({len(rows)} записей). Нужно минимум {config.MIN_DATA_POINTS}."
+        return f"📊 По району *{safe_district}* пока мало данных ({len(rows)} записей). Нужно минимум {config.MIN_DATA_POINTS}."
 
     hourly_data = defaultdict(list)
     for row in rows:
         hourly_data[row['hour']].append(row['coefficient'])
 
-    text = f"📈 *Прогноз по району: {district}*\n"
+    text = f"📈 *Прогноз по району: {safe_district}*\n"
     text += f"_Сегодня ({get_day_name(current_dow)}), на основе {len(rows)} записей_\n\n"
 
     for hour in sorted(hourly_data.keys()):
@@ -387,7 +411,7 @@ def get_district_forecast(district: str) -> str:
 
 def get_weekly_report() -> str:
     """Отчёт за неделю для админа"""
-    week_ago = datetime.now() - timedelta(days=7)
+    week_ago = config.moscow_time_str(timedelta(days=-7))
 
     conn = sqlite3.connect(config.DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -400,7 +424,7 @@ def get_weekly_report() -> str:
                AVG(coefficient) as avg_coefficient
         FROM coefficients 
         WHERE timestamp > ?
-    """, (week_ago.strftime('%Y-%m-%d %H:%M:%S'),))
+    """, (week_ago,))
 
     row = cursor.fetchone()
     conn.close()
@@ -458,6 +482,6 @@ def get_top_moments() -> str:
         except Exception:
             date_str = str(ts)[:16]
 
-        text += f"{i}. {row['district']}: *{row['coefficient']}x* ({date_str})\n"
+        text += f"{i}. {escape_markdown(row['district'])}: *{row['coefficient']}x* ({date_str})\n"
 
     return text

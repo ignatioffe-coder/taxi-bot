@@ -1,6 +1,8 @@
 """Конфигурация бота"""
 
 import os
+from datetime import datetime, timedelta, timezone
+
 from dotenv import load_dotenv
 
 # Загружаем переменные из .env файла (только для локального запуска)
@@ -73,3 +75,20 @@ DB_PATH = "taxi_data.db"
 
 # Минимум данных для рекомендации
 MIN_DATA_POINTS = 5
+
+# === Время ===
+# Бот работает по московскому времени, а сервер (Railway/Heroku) живёт в UTC.
+# Старая формула datetime.now() + 3 часа давала верный результат только на
+# сервере в UTC: на машине, которая уже стоит в московской зоне, получался
+# сдвиг на +3 часа, и весь анализ (часы пик, день недели) уезжал.
+MOSCOW_TZ = timezone(timedelta(hours=3), name="MSK")
+
+
+def get_moscow_time() -> datetime:
+    """Текущее московское время (naive — в таком виде оно хранится в БД)."""
+    return datetime.now(timezone.utc).astimezone(MOSCOW_TZ).replace(tzinfo=None)
+
+
+def moscow_time_str(delta: timedelta = timedelta(0)) -> str:
+    """Московское время в формате БД, сдвинутое на delta (например -30 дней)."""
+    return (get_moscow_time() + delta).strftime('%Y-%m-%d %H:%M:%S')

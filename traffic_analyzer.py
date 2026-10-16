@@ -3,24 +3,38 @@
 Бесплатные источники: Яндекс.Карты, Google Maps, OpenStreetMap
 """
 
-import requests
-import json
-from datetime import datetime, timedelta
-import random
-from bs4 import BeautifulSoup
 import re
+from datetime import datetime, timedelta
+
+import requests
+from bs4 import BeautifulSoup
+
+import config
+
+
+def _now_moscow() -> datetime:
+    """Текущее московское время.
+
+    ИСПРАВЛЕНО: раньше использовалось datetime.now() — на сервере в UTC
+    прогноз пробок сдвигался на 3 часа и показывал не тот час пик.
+    """
+    return config.get_moscow_time()
+
 
 class TrafficAnalyzer:
     def __init__(self):
         self.cache = {}
-        self.cache_time = 0
-        
+        self.cache_time = None
+
     def get_traffic_data(self, force_update=False):
         """Получает данные о пробках"""
-        now = datetime.now()
-        
+        now = _now_moscow()
+
         # Используем кэш на 5 минут (чтобы не спамить запросы)
-        if not force_update and self.cache and (now - self.cache_time).seconds < 300:
+        # ИСПРАВЛЕНО: .seconds у timedelta — это остаток от суток, а не вся
+        # разница; нужен total_seconds().
+        if (not force_update and self.cache and self.cache_time is not None
+                and (now - self.cache_time).total_seconds() < 300):
             return self.cache
         
         # Пробуем получить данные из разных источников
@@ -44,22 +58,31 @@ class TrafficAnalyzer:
             
             response = requests.get(url, headers=headers, timeout=10)
             soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Ищем данные о пробках в JavaScript
-            scripts = soup.find_all('script')
-            for script in scripts:
-                if script.string and 'traffic' in script.string.lower():
-                    # Ищем числа от 1 до 10 (баллы пробок)
-                    numbers = re.findall(r'\b([1-9]|10)\b', script.string)
-                    if numbers:
-                        score = int(numbers[0])
-                        return {
-                            'score': score,
-                            'level': self._get_traffic_level(score),
-                            'source': 'yandex',
-                            'update_time': datetime.now().isoformat()
-                        }
-            
+
+            # ИСПРАВЛЕНО: раньше из любого скрипта, где встречается слово
+            # traffic, бралось просто первое число 1-9 — это давало почти
+            # случайный «балл пробок», который показывался как реальные данные.
+            # Теперь доверяем только явным полям со счётом пробок.
+            score_patterns = (
+                r'"trafficScore"\s*:\s*(\d{1,2})',
+                r'"score"\s*:\s*(\d{1,2})',
+                r'trafficScore["\']?\s*[:=]\s*(\d{1,2})',
+            )
+            for script in soup.find_all('script'):
+                if not script.string or 'traffic' not in script.string.lower():
+                    continue
+                for pattern in score_patterns:
+                    match = re.search(pattern, script.string)
+                    if match:
+                        score = int(match.group(1))
+                        if 1 <= score <= 10:
+                            return {
+                                'score': score,
+                                'level': self._get_traffic_level(score),
+                                'source': 'yandex',
+                                'update_time': _now_moscow().isoformat()
+                            }
+
             # Если не нашли, пробуем альтернативный метод
             return None
             
@@ -69,7 +92,7 @@ class TrafficAnalyzer:
     
     def _get_traffic_by_time(self):
         """Расчёт пробок на основе времени и дня недели"""
-        now = datetime.now()
+        now = _now_moscow()
         hour = now.hour
         weekday = now.weekday()
         is_weekend = weekday >= 5
@@ -100,7 +123,7 @@ class TrafficAnalyzer:
             'score': score,
             'level': self._get_traffic_level(score),
             'source': 'time_based',
-            'update_time': datetime.now().isoformat()
+            'update_time': _now_moscow().isoformat()
         }
     
     def _get_traffic_level(self, score):
@@ -118,7 +141,7 @@ class TrafficAnalyzer:
     
     def get_traffic_forecast(self, hours_ahead=1):
         """Прогноз пробок на ближайшие часы"""
-        now = datetime.now()
+        now = _now_moscow()
         forecast = []
         
         for i in range(hours_ahead):
@@ -194,9 +217,17 @@ def get_traffic_report():
     analyzer = TrafficAnalyzer()
     traffic = analyzer.get_traffic_data()
     forecast = analyzer.get_traffic_forecast(3)
-    
+
+    # Честно показываем, откуда взялась оценка: реальные данные Яндекса
+    # или расчёт по времени суток.
+    if traffic.get('source') == 'yandex':
+        source_note = "данные Яндекс.Карт"
+    else:
+        source_note = "оценка по времени суток (живые данные недоступны)"
+
     report = f"""
 {traffic['level']['color']} **Пробки в Москве прямо сейчас:** {traffic['level']['text']} ({traffic['score']}/10 баллов)
+_Источник: {source_note}_
 
 **Влияние на такси:**
 {_get_traffic_impact_text(traffic['score'])}

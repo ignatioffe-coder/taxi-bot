@@ -3,3 +3,9 @@ __pycache__/
 .env
 taxi_data.db
 *.db
+
+# локальное окружение и артефакты запуска
+venv/
+.venv/
+maps/
+.pytest_cache/

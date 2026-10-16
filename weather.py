@@ -1,4 +1,10 @@
+from datetime import datetime, timedelta, timezone
+
 import requests
+
+# Московское время. Раньше здесь было datetime.now() — на сервере в UTC
+# запасной прогноз показывал не то время суток.
+MOSCOW_TZ = timezone(timedelta(hours=3))
 
 def get_weather(city="Moscow"):
     """Погода через wttr.in (бесплатно, без ключа)"""
@@ -60,13 +66,12 @@ def get_weather(city="Moscow"):
             # Запасной вариант
             return get_fallback_weather()
             
-    except Exception as e:
+    except Exception:
         return get_fallback_weather()
 
 def get_fallback_weather():
     """Запасной вариант погоды"""
-    from datetime import datetime
-    hour = datetime.now().hour
+    hour = datetime.now(MOSCOW_TZ).hour
     
     if 6 <= hour < 12:
         return "🌡️ Погода в Москве: ☀️ Утро, ~15°C"

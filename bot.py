@@ -4,7 +4,6 @@ Taxi Forecast Bot — бот для таксистов Москвы
 
 import asyncio
 import logging
-from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -14,7 +13,7 @@ import config
 import database
 import analytics
 import heatmap
-from traffic_analyzer import get_traffic_report, TrafficAnalyzer
+from traffic_analyzer import get_traffic_report
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -61,8 +60,9 @@ def get_weather() -> str:
         return "🌡️ Погода недоступна"
 
     except Exception:
-        # Запасной вариант на основе времени суток
-        hour = datetime.now().hour
+        # Запасной вариант на основе времени суток.
+        # ИСПРАВЛЕНО: время московское — на сервере в UTC «утро» наступало в 09:00 МСК.
+        hour = config.get_moscow_time().hour
         if 6 <= hour < 12:
             return "🌅 Утро"
         elif 12 <= hour < 18:
@@ -160,7 +160,9 @@ async def cmd_help(message: types.Message):
 
 @dp.message(Command("weather"))
 async def cmd_weather(message: types.Message):
-    weather = get_weather()
+    # ИСПРАВЛЕНО: запрос к wttr.in синхронный и раньше блокировал event loop
+    # на несколько секунд — в это время бот не отвечал никому.
+    weather = await asyncio.to_thread(get_weather)
     await message.answer(f"🌡️ Погода в Москве сейчас:\n\n{weather}", reply_markup=get_main_keyboard())
 
 
@@ -176,14 +178,18 @@ async def cmd_admin(message: types.Message):
         return
 
     report = analytics.get_weekly_report()
-    await message.answer(report)
+    # ИСПРАВЛЕНО: отчёт содержит markdown (*жирный*), но parse_mode не был указан,
+    # и водители видели звёздочки прямо в тексте.
+    await message.answer(report, parse_mode="Markdown")
 
 
 @dp.message(Command("traffic"))
 async def cmd_traffic(message: types.Message):
     await message.answer("🚗 Анализирую пробки...")
     try:
-        text = get_traffic_report()
+        # ИСПРАВЛЕНО: парсинг Яндекса — синхронные сетевые запросы,
+        # через to_thread они не морозят остальных пользователей.
+        text = await asyncio.to_thread(get_traffic_report)
         await message.answer(text, parse_mode="Markdown")
     except Exception as e:
         logger.error(f"Ошибка анализа пробок: {e}")
@@ -194,9 +200,10 @@ async def cmd_traffic(message: types.Message):
 async def recommendations_handler(message: types.Message):
     await message.answer("⏳ Анализирую данные...")
 
-    weather = get_weather()
+    weather = await asyncio.to_thread(get_weather)
+    # ИСПРАВЛЕНО: текст рекомендаций содержит markdown, а parse_mode не передавался.
     text = analytics.get_current_recommendations()
-    full_text = f"🌡️ {weather}\n\n{text}"
+    full_text = f"🌡️ {analytics.escape_markdown(weather)}\n\n{text}"
 
     if "дождь" in weather.lower() or "гроза" in weather.lower():
         full_text += "\n\n💡 Совет: Из-за дождя спрос выше обычного! 👍"
@@ -207,7 +214,7 @@ async def recommendations_handler(message: types.Message):
     elif "ночь" in weather.lower():
         full_text += "\n\n💡 Совет: Ночью аэропорты и клубы дают высокие коэффициенты 🌙"
 
-    await message.answer(full_text, reply_markup=get_main_keyboard())
+    await message.answer(full_text, parse_mode="Markdown", reply_markup=get_main_keyboard())
 
 
 @dp.message(F.text == "📍 Прислать коэффициент")
@@ -245,7 +252,8 @@ async def my_stats_handler(message: types.Message):
 @dp.message(F.text == "🏆 Топ моменты")
 async def top_moments_handler(message: types.Message):
     text = analytics.get_top_moments()
-    await message.answer(text, reply_markup=get_main_keyboard())
+    # ИСПРАВЛЕНО: добавляем parse_mode, иначе markdown виден как символы
+    await message.answer(text, parse_mode="Markdown", reply_markup=get_main_keyboard())
 
 
 @dp.message(F.text == "🗺️ Карта спроса")
@@ -253,7 +261,9 @@ async def map_handler(message: types.Message):
     await message.answer("🗺️ Генерирую карту спроса... Подождите секунду...")
 
     try:
-        img_buf = heatmap.generate_map()
+        # ИСПРАВЛЕНО: matplotlib рисует карту несколько секунд и раньше
+        # блокировал event loop целиком — выносим в поток.
+        img_buf = await asyncio.to_thread(heatmap.generate_map)
         photo = BufferedInputFile(img_buf.getvalue(), filename="demand_map.png")
 
         await message.answer_photo(
@@ -287,7 +297,7 @@ async def traffic_button(message: types.Message):
 
 @dp.message(F.text == "🌡️ Погода")
 async def weather_button_handler(message: types.Message):
-    weather = get_weather()
+    weather = await asyncio.to_thread(get_weather)
     await message.answer(f"🌡️ Погода в Москве сейчас:\n\n{weather}", reply_markup=get_main_keyboard())
 
 
@@ -304,14 +314,22 @@ async def back_handler(message: types.Message):
     await message.answer("Главное меню:", reply_markup=get_main_keyboard())
 
 
-@dp.message(lambda msg: msg.from_user.id in user_temp_data)
+@dp.message(lambda msg: msg.from_user is not None and msg.from_user.id in user_temp_data)
 async def state_handler(message: types.Message):
     user_id = message.from_user.id
     data = user_temp_data.get(user_id, {})
     step = data.get("step")
+    text = message.text
+
+    # ИСПРАВЛЕНО: сообщение без текста (фото, стикер, голосовое, документ)
+    # раньше роняло обработчик — message.text is None, а код сразу звал
+    # .replace() или писал None в базу. Диалог после этого зависал.
+    if not text:
+        await message.answer("Пожалуйста, ответь текстом 🙂")
+        return
 
     if step == "district":
-        district = message.text
+        district = text
         if district == "⬅️ Назад":
             del user_temp_data[user_id]
             await message.answer("Главное меню:", reply_markup=get_main_keyboard())
@@ -330,7 +348,7 @@ async def state_handler(message: types.Message):
 
     if step == "coefficient":
         try:
-            coef = float(message.text.replace(",", "."))
+            coef = float(text.replace(",", "."))
             if coef < 0.5 or coef > 5.0:
                 await message.answer("⚠️ Коэффициент выглядит странно. Обычно это 1.0-3.0. Введи ещё раз:")
                 return
@@ -351,7 +369,7 @@ async def state_handler(message: types.Message):
             return
 
     if step == "weather":
-        weather = message.text
+        weather = text
         if weather == "⏩ Пропустить":
             weather = ""
         elif weather in ["☀️ Ясно", "🌤️ Облачно", "🌧️ Дождь", "❄️ Снег", "🌫️ Туман", "🌩️ Гроза"]:
@@ -361,21 +379,21 @@ async def state_handler(message: types.Message):
         data["step"] = "confirm"
         user_temp_data[user_id] = data
 
-        text = (
+        summary = (
             f"📋 Проверь данные:\n\n"
             f"📍 Район: {data['district']}\n"
             f"📈 Коэффициент: {data['coefficient']}x\n"
             f"🌤️ Погода: {weather or 'не указана'}\n\n"
             f"Всё верно?"
         )
-        await message.answer(text, reply_markup=get_confirm_keyboard())
+        await message.answer(summary, reply_markup=get_confirm_keyboard())
         return
 
     if step == "confirm":
-        if message.text == "✅ Всё верно":
+        if text == "✅ Всё верно":
             weather_value = data.get("weather", "")
             if not weather_value:
-                weather_value = get_weather()
+                weather_value = await asyncio.to_thread(get_weather)
 
             success = database.add_coefficient(
                 user_id=user_id,
@@ -390,6 +408,7 @@ async def state_handler(message: types.Message):
                 await message.answer(
                     f"✅ Сохранено!\n\n"
                     f"Спасибо за данные! Вот что я знаю об этом районе:\n\n{forecast}",
+                    parse_mode="Markdown",
                     reply_markup=get_main_keyboard(),
                 )
             else:
@@ -400,20 +419,39 @@ async def state_handler(message: types.Message):
 
             del user_temp_data[user_id]
 
-        elif message.text == "❌ Изменить":
+        elif text == "❌ Изменить":
             data["step"] = "district"
             user_temp_data[user_id] = data
             await message.answer(
                 "Ок, начнём заново. Выбери район:",
                 reply_markup=get_districts_keyboard(),
             )
+        else:
+            # ИСПРАВЛЕНО: раньше любой другой ответ молча игнорировался,
+            # и пользователь оставался висеть на шаге подтверждения.
+            await message.answer(
+                "Выбери «✅ Всё верно» или «❌ Изменить» на клавиатуре ниже.",
+                reply_markup=get_confirm_keyboard(),
+            )
         return
 
 
 @dp.message()
 async def any_text_handler(message: types.Message):
+    # ИСПРАВЛЕНО: у фото, стикеров и голосовых message.text == None,
+    # а код сразу вызывал .replace() — AttributeError не ловился
+    # (в except были только ValueError/TypeError), и бот молчал.
+    text = message.text
+    if not text:
+        await message.answer(
+            "Я понимаю только текст и кнопки 🙂\n"
+            "Отправь коэффициент числом (например 1.3) или используй кнопки ниже.",
+            reply_markup=get_main_keyboard(),
+        )
+        return
+
     try:
-        coef = float(message.text.replace(",", "."))
+        coef = float(text.replace(",", "."))
         if 0.5 <= coef <= 5.0:
             user_temp_data[message.from_user.id] = {
                 "step": "district",
