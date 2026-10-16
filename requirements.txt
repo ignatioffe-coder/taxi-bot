@@ -1,7 +1,19 @@
-aiogram==3.4.1
-requests==2.31.0
-matplotlib==3.7.2
-numpy==1.24.3
-pillow==10.0.0
-python-dotenv==1.0.0
-beautifulsoup4==4.12.2
+# Версии заданы диапазонами, а не жёстко: на хостинге может стоять
+# Python 3.11, 3.12 или 3.13, и старые пины (numpy 1.24, matplotlib 3.7)
+# на новых версиях Python просто не собираются — сборка падала бы.
+# Код проверен на aiogram 3.31.0, matplotlib 3.11.2, numpy 2.5.4, pillow 12.3.0.
+
+# Telegram
+aiogram>=3.4.1,<4
+
+# Сеть и разбор страниц (погода, пробки)
+requests>=2.31,<3
+beautifulsoup4>=4.12,<5
+
+# Карта спроса (PNG)
+matplotlib>=3.7,<4
+numpy>=1.24,<3
+pillow>=10.0,<13
+
+# Конфигурация
+python-dotenv>=1.0,<2

@@ -2,6 +2,7 @@
 
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -70,8 +71,24 @@ MOSCOW_DISTRICTS = [
     "Другой (указать вручную)"
 ]
 
-# Файл базы данных
-DB_PATH = "taxi_data.db"
+# === Файл базы данных ===
+# Локально база лежит рядом с кодом. На хостинге код перезаписывается при
+# каждом обновлении, поэтому базу надо держать в постоянной папке — иначе
+# все накопленные коэффициенты стираются при деплое.
+# Bothost (и похожие платформы) монтируют такую папку как /app/data и умеют
+# передавать путь через переменную окружения DB_PATH.
+def _resolve_db_path() -> str:
+    env_path = os.getenv("DB_PATH") or os.getenv("DATABASE_PATH")
+    if env_path:
+        return env_path
+    persistent = Path("/app/data")  # постоянное хранилище на хостинге
+    if persistent.is_dir():
+        return str(persistent / "taxi_data.db")
+    return str(Path(__file__).resolve().parent / "taxi_data.db")
+
+
+DB_PATH = _resolve_db_path()
+Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 
 # Минимум данных для рекомендации
 MIN_DATA_POINTS = 5
