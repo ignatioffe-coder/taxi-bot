@@ -14,6 +14,7 @@ import database
 import analytics
 import heatmap
 from traffic_analyzer import get_traffic_report
+from weather import get_weather
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,54 +23,9 @@ bot = Bot(token=config.BOT_TOKEN)
 dp = Dispatcher()
 
 
-def get_weather() -> str:
-    """Получение реальной погоды в Москве через wttr.in"""
-    import requests
-
-    try:
-        url = "https://wttr.in/Moscow?format=%C+%t&lang=ru"
-        response = requests.get(url, timeout=5)
-
-        if response.status_code == 200:
-            text = response.text.strip()
-
-            weather_map = {
-                "Clear": "☀️ Ясно",
-                "Sunny": "☀️ Солнечно",
-                "Partly cloudy": "⛅ Переменная облачность",
-                "Cloudy": "☁️ Облачно",
-                "Overcast": "☁️ Пасмурно",
-                "Rain": "🌧️ Дождь",
-                "Light rain": "🌦️ Небольшой дождь",
-                "Heavy rain": "🌧️ Сильный дождь",
-                "Rain, Thunderstorm": "⛈️ Гроза с дождём",
-                "Thunderstorm": "⛈️ Гроза",
-                "Light Rain With Thunderstorm": "⛈️ Гроза с дождём",
-                "Snow": "❄️ Снег",
-                "Light snow": "🌨️ Небольшой снег",
-                "Heavy snow": "❄️ Сильный снег",
-                "Fog": "🌫️ Туман",
-                "Mist": "🌫️ Дымка",
-            }
-
-            for eng, rus in weather_map.items():
-                if eng.lower() in text.lower():
-                    return rus
-
-            return f"🌡️ {text}"
-        return "🌡️ Погода недоступна"
-
-    except Exception:
-        # Запасной вариант на основе времени суток.
-        # ИСПРАВЛЕНО: время московское — на сервере в UTC «утро» наступало в 09:00 МСК.
-        hour = config.get_moscow_time().hour
-        if 6 <= hour < 12:
-            return "🌅 Утро"
-        elif 12 <= hour < 18:
-            return "☀️ День"
-        elif 18 <= hour < 23:
-            return "🌙 Вечер"
-        return "🌙 Ночь"
+async def fetch_weather() -> dict:
+    """Погода для сообщений: запрос к сервису уводим в поток, чтобы не морозить бота."""
+    return await asyncio.to_thread(get_weather)
 
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
@@ -160,10 +116,10 @@ async def cmd_help(message: types.Message):
 
 @dp.message(Command("weather"))
 async def cmd_weather(message: types.Message):
-    # ИСПРАВЛЕНО: запрос к wttr.in синхронный и раньше блокировал event loop
-    # на несколько секунд — в это время бот не отвечал никому.
-    weather = await asyncio.to_thread(get_weather)
-    await message.answer(f"🌡️ Погода в Москве сейчас:\n\n{weather}", reply_markup=get_main_keyboard())
+    # ИСПРАВЛЕНО: запрос к сервису погоды синхронный и раньше блокировал
+    # event loop на несколько секунд — в это время бот не отвечал никому.
+    weather = await fetch_weather()
+    await message.answer(f"🌡️ Погода в Москве сейчас:\n\n{weather['text']}", reply_markup=get_main_keyboard())
 
 
 @dp.message(Command("map"))
@@ -200,18 +156,20 @@ async def cmd_traffic(message: types.Message):
 async def recommendations_handler(message: types.Message):
     await message.answer("⏳ Анализирую данные...")
 
-    weather = await asyncio.to_thread(get_weather)
+    weather = await fetch_weather()
     # ИСПРАВЛЕНО: текст рекомендаций содержит markdown, а parse_mode не передавался.
     text = analytics.get_current_recommendations()
-    full_text = f"🌡️ {analytics.escape_markdown(weather)}\n\n{text}"
+    full_text = f"{analytics.escape_markdown(weather['text'])}\n\n{text}"
 
-    if "дождь" in weather.lower() or "гроза" in weather.lower():
+    # Совет подбираем по состоянию погоды, а не по всей строке целиком
+    condition = weather["condition"].lower()
+    if "дождь" in condition or "гроза" in condition:
         full_text += "\n\n💡 Совет: Из-за дождя спрос выше обычного! 👍"
-    elif "снег" in weather.lower():
+    elif "снег" in condition:
         full_text += "\n\n💡 Совет: Снегопад = много заказов, но езжайте осторожнее! ❄️"
-    elif "солнечно" in weather.lower() or "ясно" in weather.lower():
+    elif "солнечно" in condition or "ясно" in condition:
         full_text += "\n\n💡 Совет: Хорошая погода = больше поездок по городу ☀️"
-    elif "ночь" in weather.lower():
+    elif "ночь" in condition:
         full_text += "\n\n💡 Совет: Ночью аэропорты и клубы дают высокие коэффициенты 🌙"
 
     await message.answer(full_text, parse_mode="Markdown", reply_markup=get_main_keyboard())
@@ -297,8 +255,8 @@ async def traffic_button(message: types.Message):
 
 @dp.message(F.text == "🌡️ Погода")
 async def weather_button_handler(message: types.Message):
-    weather = await asyncio.to_thread(get_weather)
-    await message.answer(f"🌡️ Погода в Москве сейчас:\n\n{weather}", reply_markup=get_main_keyboard())
+    weather = await fetch_weather()
+    await message.answer(f"🌡️ Погода в Москве сейчас:\n\n{weather['text']}", reply_markup=get_main_keyboard())
 
 
 @dp.message(F.text == "❓ Помощь")
@@ -393,7 +351,7 @@ async def state_handler(message: types.Message):
         if text == "✅ Всё верно":
             weather_value = data.get("weather", "")
             if not weather_value:
-                weather_value = await asyncio.to_thread(get_weather)
+                weather_value = (await fetch_weather())["text"]
 
             success = database.add_coefficient(
                 user_id=user_id,
