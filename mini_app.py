@@ -114,7 +114,9 @@ def _recommendations() -> list[dict]:
 
 
 async def index(_request: web.Request) -> web.FileResponse:
-    return web.FileResponse(STATIC_DIR / "index.html")
+    response = web.FileResponse(STATIC_DIR / "index.html")
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def _period_start(period: str) -> datetime:

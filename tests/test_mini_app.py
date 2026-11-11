@@ -89,6 +89,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_serves_mini_app_assets(self):
         response = await self.client.get("/")
         self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
         self.assertIn("Taxi Forecast", await response.text())
 
         response = await self.client.get("/static/app.js")
