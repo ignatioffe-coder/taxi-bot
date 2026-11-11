@@ -17,6 +17,14 @@ if not BOT_TOKEN:
         "или установи переменную окружения BOT_TOKEN."
     )
 
+# Публичный HTTPS-адрес Mini App на Bothost; можно переопределить переменной среды.
+WEBAPP_URL = (
+    os.getenv("WEBAPP_URL") or
+    "https://bot-1792186571-5969-taxi-bot.bothost.tech"
+).strip().rstrip("/")
+if WEBAPP_URL and not WEBAPP_URL.startswith("https://"):
+    raise ValueError("WEBAPP_URL должен быть публичным HTTPS-адресом.")
+
 # ID администратора (твой или брата) — для отчётов и управления
 ADMIN_IDS = [7925732814]  # Сделано списком, как в основном коде
 
