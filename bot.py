@@ -4,10 +4,15 @@ Taxi Forecast Bot — бот для таксистов Москвы
 
 import asyncio
 import logging
+import os
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, BufferedInputFile
+from aiogram.types import (
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, BufferedInputFile,
+    WebAppInfo,
+)
+from aiohttp import web
 
 import config
 import database
@@ -29,7 +34,13 @@ async def fetch_weather() -> dict:
 
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
-    kb = [
+    kb = []
+    if config.WEBAPP_URL:
+        kb.append([KeyboardButton(
+            text="🚕 Открыть Mini App",
+            web_app=WebAppInfo(url=config.WEBAPP_URL),
+        )])
+    kb.extend([
         [KeyboardButton(text="📊 Рекомендации сейчас")],
         [KeyboardButton(text="📍 Прислать коэффициент")],
         [KeyboardButton(text="📈 Моя статистика")],
@@ -38,7 +49,7 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🚗 Пробки")],
         [KeyboardButton(text="🌡️ Погода")],
         [KeyboardButton(text="❓ Помощь")],
-    ]
+    ])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 
@@ -112,6 +123,25 @@ async def cmd_help(message: types.Message):
         "• Делись ботом с коллегами — чем больше данных, тем лучше прогнозы"
     )
     await message.answer(text, reply_markup=get_main_keyboard())
+
+
+@dp.message(Command("app"))
+async def cmd_app(message: types.Message):
+    if not config.WEBAPP_URL:
+        await message.answer(
+            "Mini App пока не настроен. Укажи публичный HTTPS-адрес в WEBAPP_URL."
+        )
+        return
+
+    await message.answer(
+        "🚕 Открой панель Taxi Forecast:",
+        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(
+                text="Открыть Mini App",
+                web_app=WebAppInfo(url=config.WEBAPP_URL),
+            )
+        ]]),
+    )
 
 
 @dp.message(Command("weather"))
@@ -434,9 +464,23 @@ async def main():
     database.init_db()
     logger.info("База данных инициализирована")
 
+    from mini_app import create_app
+
+    app_runner = None
+    if config.WEBAPP_URL:
+        app_runner = web.AppRunner(create_app())
+        await app_runner.setup()
+        site = web.TCPSite(app_runner, "0.0.0.0", int(os.getenv("PORT", "8080")))
+        await site.start()
+        logger.info("Mini App server started")
+
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("Бот запущен!")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        if app_runner:
+            await app_runner.cleanup()
 
 
 if __name__ == "__main__":

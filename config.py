@@ -17,6 +17,11 @@ if not BOT_TOKEN:
         "или установи переменную окружения BOT_TOKEN."
     )
 
+# Публичный HTTPS-адрес веб-приложения Telegram (задаётся после деплоя).
+WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip().rstrip("/")
+if WEBAPP_URL and not WEBAPP_URL.startswith("https://"):
+    raise ValueError("WEBAPP_URL должен быть публичным HTTPS-адресом.")
+
 # ID администратора (твой или брата) — для отчётов и управления
 ADMIN_IDS = [7925732814]  # Сделано списком, как в основном коде
 

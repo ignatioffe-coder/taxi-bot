@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#10151c">
+  <title>Taxi Forecast</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">TAXI FORECAST · МОСКВА</p>
+        <h1>Привет, <span id="driver-name">водитель</span></h1>
+      </div>
+      <button id="refresh" class="icon-button" aria-label="Обновить данные">↻</button>
+    </header>
+
+    <section class="summary-grid" aria-label="Моя статистика">
+      <article class="summary-card">
+        <span class="card-label">Мои записи</span>
+        <strong id="total-records">—</strong>
+        <span class="card-note">коэффициентов</span>
+      </article>
+      <article class="summary-card accent-card">
+        <span class="card-label">Мой средний</span>
+        <strong><span id="avg-coefficient">—</span><small>x</small></strong>
+        <span class="card-note">за всё время</span>
+      </article>
+    </section>
+
+    <section class="section">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">НА ЭТОТ ЧАС</p>
+          <h2>Куда ехать</h2>
+        </div>
+        <span class="live-pill"><i></i> прогноз</span>
+      </div>
+      <div id="recommendations" class="recommendations">
+        <div class="loading">Загружаем прогноз…</div>
+      </div>
+      <p class="muted footnote">Средние значения за последние 30 дней в похожее время.</p>
+    </section>
+
+    <section class="section">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">СПРОС ПО РАЙОНАМ</p>
+          <h2>Карта спроса</h2>
+        </div>
+      </div>
+      <div class="map-frame">
+        <img id="demand-map" alt="Карта спроса такси по районам Москвы" hidden>
+        <div id="map-loading" class="loading">Строим карту…</div>
+      </div>
+    </section>
+
+    <section class="section submit-section">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">ПОМОГИ КОЛЛЕГАМ</p>
+          <h2>Добавить коэффициент</h2>
+        </div>
+      </div>
+      <form id="coefficient-form">
+        <label for="district">Район</label>
+        <select id="district" name="district" required>
+          <option value="">Выбери район</option>
+        </select>
+        <label for="coefficient">Коэффициент</label>
+        <div class="input-wrap"><input id="coefficient" name="coefficient" type="number" min="0.5" max="5" step="0.1" placeholder="Например, 1.8" required><span>x</span></div>
+        <label for="weather">Погода</label>
+        <select id="weather" name="weather">
+          <option value="">Не указывать</option>
+          <option>Ясно</option>
+          <option>Облачно</option>
+          <option>Дождь</option>
+          <option>Снег</option>
+          <option>Туман</option>
+          <option>Гроза</option>
+        </select>
+        <button class="primary-button" type="submit">Отправить данные <span>→</span></button>
+      </form>
+      <p id="form-message" class="form-message" role="status"></p>
+    </section>
+
+    <footer>Данные сообщества водителей · Taxi Forecast</footer>
+  </main>
+  <div id="toast" class="toast" role="status"></div>
+</body>
+</html>
