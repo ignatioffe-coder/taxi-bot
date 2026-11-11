@@ -86,6 +86,16 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             132,
         )
 
+    async def test_district_catalog_is_public(self):
+        response = await self.client.get("/api/districts")
+        self.assertEqual(response.status, 200)
+        catalog = await response.json()
+        self.assertEqual(len(catalog["district_groups"]), 12)
+        self.assertEqual(
+            sum(len(group["districts"]) for group in catalog["district_groups"]),
+            132,
+        )
+
     async def test_serves_mini_app_assets(self):
         response = await self.client.get("/")
         self.assertEqual(response.status, 200)

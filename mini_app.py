@@ -117,6 +117,29 @@ async def index(_request: web.Request) -> web.FileResponse:
     response = web.FileResponse(STATIC_DIR / "index.html")
     response.headers["Cache-Control"] = "no-store"
     return response
+def _build_district_groups(market_stats: dict) -> list[dict]:
+    return [
+        {
+            "name": okrug,
+            "districts": [
+                {
+                    "name": district,
+                    **market_stats.get(district, {
+                        "avg_coefficient": None,
+                        "records": 0,
+                        "last_update": None,
+                    }),
+                }
+                for district in districts
+            ],
+        }
+        for okrug, districts in config.MOSCOW_DISTRICTS_BY_OKRUG.items()
+    ]
+
+
+async def district_catalog(_request: web.Request) -> web.Response:
+    market_stats = await asyncio.to_thread(database.get_market_district_stats)
+    return web.json_response({"district_groups": _build_district_groups(market_stats)})
 
 
 def _period_start(period: str) -> datetime:
@@ -150,23 +173,7 @@ async def dashboard(request: web.Request) -> web.Response:
         asyncio.to_thread(database.get_market_district_stats),
     )
     coefficient_stats = database.get_user_stats(user["id"])
-    district_groups = [
-        {
-            "name": okrug,
-            "districts": [
-                {
-                    "name": district,
-                    **market_stats.get(district, {
-                        "avg_coefficient": None,
-                        "records": 0,
-                        "last_update": None,
-                    }),
-                }
-                for district in districts
-            ],
-        }
-        for okrug, districts in config.MOSCOW_DISTRICTS_BY_OKRUG.items()
-    ]
+    district_groups = _build_district_groups(market_stats)
     return web.json_response({
         "user": {
             "first_name": user.get("first_name", ""),
@@ -283,6 +290,7 @@ def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/", index)
     app.router.add_static("/static/", path=STATIC_DIR)
+    app.router.add_get("/api/districts", district_catalog)
     app.router.add_get("/api/dashboard", dashboard)
     app.router.add_post("/api/coefficients", submit_coefficient)
     app.router.add_post("/api/shifts", submit_shift)

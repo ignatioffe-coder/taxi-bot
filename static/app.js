@@ -31,8 +31,8 @@
   function showError(error) {
     if (error.status === 401) {
       showToast(hasTelegramAuth
-        ? "Сессия Telegram устарела. Закрой и открой приложение снова."
-        : "Открой Mini App кнопкой в Telegram, чтобы загрузить данные.");
+        ? "Telegram не смог подтвердить сессию. Проверь BOT_TOKEN в BotHost и перезапусти бота."
+        : "Telegram не передал данные. Отправь боту /start и открой Mini App кнопкой под новым сообщением.");
     } else {
       showToast(error.message || "Не удалось выполнить запрос. Попробуй ещё раз.");
     }
@@ -58,6 +58,13 @@
       throw error;
     }
     return response;
+  }
+
+  async function loadDistrictCatalog() {
+    const response = await fetch("/api/districts");
+    if (!response.ok) throw new Error("Не удалось загрузить список районов.");
+    const data = await response.json();
+    renderDistricts(data.district_groups);
   }
 
   function setView(view) {
@@ -460,12 +467,13 @@
   if (hasTelegramAuth) {
     loadDashboard().catch(showError);
   } else {
-    const notice = '<p class="empty-note">Открой Mini App кнопкой в Telegram, чтобы загрузить данные.</p>';
+    const notice = '<p class="empty-note">Telegram не передал данные авторизации. Отправь боту /start и открой Mini App кнопкой под новым сообщением.</p>';
     $("recommendations").innerHTML = notice;
     $("district-groups").innerHTML = notice;
     $("week-chart").innerHTML = notice;
     $("expense-breakdown").innerHTML = notice;
     $("recent-shifts").innerHTML = notice;
     $("shift-history").innerHTML = notice;
+    loadDistrictCatalog().catch(showError);
   }
 })();

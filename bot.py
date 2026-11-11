@@ -7,7 +7,7 @@ import os
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 import config
 import database
@@ -19,15 +19,23 @@ bot = Bot(token=config.BOT_TOKEN)
 dp = Dispatcher()
 
 
-def get_main_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[[
-            KeyboardButton(
+def get_main_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(
                 text="📱 Открыть Taxi Forecast",
                 web_app=WebAppInfo(url=config.WEBAPP_URL),
             )
         ]],
         resize_keyboard=True,
+    )
+
+
+async def send_app_launcher(message: types.Message, text: str) -> None:
+    await message.answer(text, reply_markup=types.ReplyKeyboardRemove())
+    await message.answer(
+        "Открой Mini App кнопкой ниже:",
+        reply_markup=get_main_keyboard(),
     )
 
 
@@ -42,42 +50,31 @@ async def cmd_start(message: types.Message):
             user.last_name or "",
         )
 
-    await message.answer(
+    await send_app_launcher(
+        message,
         "🚕 Taxi Forecast — приложение для водителей такси и курьеров.\n\n"
         "Записывай смены, доходы и расходы, следи за прибылью "
         "и находи спрос по районам Москвы.",
-        reply_markup=get_main_keyboard(),
     )
 
 
 @dp.message(Command("app"))
 async def cmd_app(message: types.Message):
-    await message.answer(
-        "Открой приложение кнопкой ниже:",
-        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-            types.InlineKeyboardButton(
-                text="📱 Открыть Taxi Forecast",
-                web_app=WebAppInfo(url=config.WEBAPP_URL),
-            )
-        ]]),
-    )
+    await send_app_launcher(message, "Запуск Taxi Forecast.")
 
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
-    await message.answer(
+    await send_app_launcher(
+        message,
         "Все функции Taxi Forecast находятся в Mini App. "
-        "Нажми «📱 Открыть Taxi Forecast» или отправь /app.",
-        reply_markup=get_main_keyboard(),
+        "Открой его кнопкой под этим сообщением.",
     )
 
 
 @dp.message()
 async def open_app_hint(message: types.Message):
-    await message.answer(
-        "Открой Taxi Forecast кнопкой ниже.",
-        reply_markup=get_main_keyboard(),
-    )
+    await send_app_launcher(message, "Открой Taxi Forecast кнопкой ниже.")
 
 
 async def main():
