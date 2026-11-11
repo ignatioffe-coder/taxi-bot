@@ -74,11 +74,17 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 401)
 
         response = await self.client.get(
-            "/api/dashboard",
+            "/api/dashboard?work_type=taxi&period=week",
             headers={"X-Telegram-Init-Data": self.init_data},
         )
         self.assertEqual(response.status, 200)
-        self.assertEqual((await response.json())["user"]["first_name"], "Driver")
+        dashboard = await response.json()
+        self.assertEqual(dashboard["user"]["first_name"], "Driver")
+        self.assertEqual(len(dashboard["district_groups"]), 12)
+        self.assertEqual(
+            sum(len(group["districts"]) for group in dashboard["district_groups"]),
+            132,
+        )
 
     async def test_serves_mini_app_assets(self):
         response = await self.client.get("/")
@@ -113,6 +119,59 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         import database
 
         self.assertEqual(database.get_user_stats(123456)["total_records"], 1)
+
+    async def test_shift_submission_and_period_totals(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        payload = {
+            "work_type": "taxi",
+            "district": config.MOSCOW_DISTRICTS[0],
+            "gross_income": 10000,
+            "tips": 1200,
+            "fuel_cost": 1500,
+            "commission_cost": 1000,
+            "maintenance_cost": 500,
+            "other_cost": 100,
+            "hours_worked": 8,
+        }
+        response = await self.client.post(
+            "/api/shifts",
+            headers=headers,
+            json=payload,
+        )
+        self.assertEqual(response.status, 200)
+
+        response = await self.client.get(
+            "/api/dashboard?work_type=taxi&period=week",
+            headers=headers,
+        )
+        self.assertEqual(response.status, 200)
+        dashboard = await response.json()
+        summary = dashboard["summary"]
+        self.assertEqual(summary["gross_income"], 10000)
+        self.assertEqual(summary["total_expenses"], 3100)
+        self.assertEqual(summary["net_income"], 8100)
+        self.assertEqual(summary["average_per_hour"], 1012.5)
+        self.assertEqual(summary["shifts"], 1)
+        self.assertEqual(len(summary["chart"]), 7)
+
+        response = await self.client.get(
+            "/api/dashboard?work_type=courier&period=week",
+            headers=headers,
+        )
+        self.assertEqual((await response.json())["summary"]["shifts"], 0)
+
+    async def test_shift_rejects_invalid_values(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        response = await self.client.post(
+            "/api/shifts",
+            headers=headers,
+            json={
+                "work_type": "taxi",
+                "gross_income": -10,
+                "hours_worked": 25,
+            },
+        )
+        self.assertEqual(response.status, 400)
 
 
 if __name__ == "__main__":

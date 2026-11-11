@@ -8,7 +8,7 @@ import logging
 import math
 import sqlite3
 import time
-from datetime import timedelta
+from datetime import datetime, time as datetime_time, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl
 
@@ -21,6 +21,16 @@ import heatmap
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 WEATHER_OPTIONS = {"", "Ясно", "Облачно", "Дождь", "Снег", "Туман", "Гроза"}
+WORK_TYPES = {"taxi", "courier"}
+PERIODS = {"day", "week", "month"}
+AMOUNT_FIELDS = {
+    "gross_income",
+    "tips",
+    "fuel_cost",
+    "commission_cost",
+    "maintenance_cost",
+    "other_cost",
+}
 MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60
 
 
@@ -90,8 +100,9 @@ def _recommendations() -> list[dict]:
         district_values.setdefault(row["district"], []).append(row["coefficient"])
 
     result = []
+    valid_districts = set(config.MOSCOW_DISTRICTS)
     for district, coefficients in district_values.items():
-        if len(coefficients) >= 3:
+        if district in valid_districts and len(coefficients) >= 3:
             result.append({
                 "district": district,
                 "avg_coefficient": round(sum(coefficients) / len(coefficients), 2),
@@ -106,33 +117,126 @@ async def index(_request: web.Request) -> web.FileResponse:
     return web.FileResponse(STATIC_DIR / "index.html")
 
 
+def _period_start(period: str) -> datetime:
+    now = config.get_moscow_time()
+    if period == "day":
+        date = now.date()
+    elif period == "week":
+        date = now.date() - timedelta(days=now.weekday())
+    else:
+        date = now.date().replace(day=1)
+    return datetime.combine(date, datetime_time.min)
+
+
 async def dashboard(request: web.Request) -> web.Response:
     user = _authenticated_user(request)
-    stats = database.get_user_stats(user["id"])
+    work_type = request.query.get("work_type", "taxi")
+    period = request.query.get("period", "week")
+    if work_type not in WORK_TYPES:
+        raise web.HTTPBadRequest(text="Choose taxi or courier")
+    if period not in PERIODS:
+        raise web.HTTPBadRequest(text="Choose day, week, or month")
+
+    summary, recommendations, market_stats = await asyncio.gather(
+        asyncio.to_thread(
+            database.get_work_summary,
+            user["id"],
+            work_type,
+            _period_start(period),
+        ),
+        asyncio.to_thread(_recommendations),
+        asyncio.to_thread(database.get_market_district_stats),
+    )
+    coefficient_stats = database.get_user_stats(user["id"])
+    district_groups = [
+        {
+            "name": okrug,
+            "districts": [
+                {
+                    "name": district,
+                    **market_stats.get(district, {
+                        "avg_coefficient": None,
+                        "records": 0,
+                        "last_update": None,
+                    }),
+                }
+                for district in districts
+            ],
+        }
+        for okrug, districts in config.MOSCOW_DISTRICTS_BY_OKRUG.items()
+    ]
     return web.json_response({
         "user": {
             "first_name": user.get("first_name", ""),
             "username": user.get("username", ""),
         },
-        "stats": {
-            "total_records": stats.get("total_records", 0) or 0,
-            "avg_coefficient": round(stats.get("avg_coef") or 0, 2),
-            "last_record": stats.get("last_record"),
+        "work_type": work_type,
+        "period": period,
+        "summary": summary,
+        "coefficient_stats": {
+            "total_records": coefficient_stats.get("total_records", 0) or 0,
+            "avg_coefficient": round(coefficient_stats.get("avg_coef") or 0, 2),
         },
-        "recommendations": await asyncio.to_thread(_recommendations),
-        "district_stats": database.get_districts_stats(),
-        "districts": config.MOSCOW_DISTRICTS,
+        "recommendations": recommendations,
+        "district_groups": district_groups,
     })
 
 
-async def demand_map(request: web.Request) -> web.Response:
-    _authenticated_user(request)
-    image = await asyncio.to_thread(heatmap.generate_map)
-    return web.Response(
-        body=image.getvalue(),
-        content_type="image/png",
-        headers={"Cache-Control": "no-store"},
+def _validated_amount(payload: dict, field: str, maximum: float = 1_000_000) -> float:
+    value = payload.get(field, 0)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not 0 <= value <= maximum
+    ):
+        raise web.HTTPBadRequest(text=f"{field} must be between 0 and {maximum}")
+    return round(float(value), 2)
+
+
+async def submit_shift(request: web.Request) -> web.Response:
+    user = _authenticated_user(request)
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, web.HTTPException):
+        raise web.HTTPBadRequest(text="Request body must be valid JSON")
+    if not isinstance(payload, dict):
+        raise web.HTTPBadRequest(text="Request body must be a JSON object")
+
+    work_type = payload.get("work_type")
+    if work_type not in WORK_TYPES:
+        raise web.HTTPBadRequest(text="Choose taxi or courier")
+
+    district = payload.get("district") or None
+    if district is not None and district not in config.MOSCOW_DISTRICTS:
+        raise web.HTTPBadRequest(text="Choose a district from the list")
+
+    amounts = {
+        field: _validated_amount(payload, field)
+        for field in AMOUNT_FIELDS
+    }
+    hours_worked = _validated_amount(payload, "hours_worked", maximum=24)
+
+    database.add_user(
+        user["id"],
+        user.get("username", ""),
+        user.get("first_name", ""),
+        user.get("last_name", ""),
     )
+    shift_id = await asyncio.to_thread(
+        database.add_work_shift,
+        user["id"],
+        work_type,
+        district,
+        amounts["gross_income"],
+        amounts["tips"],
+        amounts["fuel_cost"],
+        amounts["commission_cost"],
+        amounts["maintenance_cost"],
+        amounts["other_cost"],
+        hours_worked,
+    )
+    return web.json_response({"saved": True, "shift_id": shift_id})
 
 
 async def submit_coefficient(request: web.Request) -> web.Response:
@@ -178,6 +282,6 @@ def create_app() -> web.Application:
     app.router.add_get("/", index)
     app.router.add_static("/static/", path=STATIC_DIR)
     app.router.add_get("/api/dashboard", dashboard)
-    app.router.add_get("/api/map", demand_map)
     app.router.add_post("/api/coefficients", submit_coefficient)
+    app.router.add_post("/api/shifts", submit_shift)
     return app
