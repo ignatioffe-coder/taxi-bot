@@ -3,92 +3,136 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#10151c">
+  <meta name="theme-color" content="#11151b">
   <title>Taxi Forecast</title>
   <link rel="stylesheet" href="/static/styles.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
-  <main class="app">
+  <main class="app-shell">
     <header class="topbar">
-      <div>
-        <p class="eyebrow">TAXI FORECAST · МОСКВА</p>
-        <h1>Привет, <span id="driver-name">водитель</span></h1>
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">T</div>
+        <div><p class="eyebrow">TAXI FORECAST</p><p class="brand-city">Москва · работа рядом</p></div>
       </div>
       <button id="refresh" class="icon-button" aria-label="Обновить данные">↻</button>
     </header>
 
-    <section class="summary-grid" aria-label="Моя статистика">
-      <article class="summary-card">
-        <span class="card-label">Мои записи</span>
-        <strong id="total-records">—</strong>
-        <span class="card-note">коэффициентов</span>
+    <section class="welcome">
+      <div><p class="eyebrow" id="today-label">ТВОЯ РАБОТА</p><h1>Привет, <span id="driver-name">водитель</span></h1></div>
+      <div class="avatar" id="avatar">В</div>
+    </section>
+
+    <div class="mode-switch" role="group" aria-label="Вид работы">
+      <button type="button" class="mode-button active" data-work-type="taxi">🚕 Такси</button>
+      <button type="button" class="mode-button" data-work-type="courier">📦 Курьер</button>
+    </div>
+
+    <nav class="bottom-nav" aria-label="Разделы приложения">
+      <button class="nav-button active" data-view="overview"><span>◫</span>Обзор</button>
+      <button class="nav-button" data-view="districts"><span>⌖</span>Районы</button>
+      <button class="nav-button" data-view="shifts"><span>＋</span>Смена</button>
+    </nav>
+
+    <section class="view active" id="view-overview">
+      <div class="period-switch" role="group" aria-label="Период статистики">
+        <button type="button" class="period-button" data-period="day">День</button>
+        <button type="button" class="period-button active" data-period="week">Неделя</button>
+        <button type="button" class="period-button" data-period="month">Месяц</button>
+      </div>
+
+      <article class="profit-card">
+        <div class="profit-topline"><span id="profit-period-label">ИТОГ ЗА НЕДЕЛЮ</span><span class="profit-dot">●</span></div>
+        <p class="profit-caption">Чистый доход</p>
+        <strong class="profit-amount" id="net-income">—</strong>
+        <div class="profit-meta"><span id="shift-count">0 смен</span><span class="meta-separator">·</span><span id="hourly-income">—/ч</span></div>
+        <div class="profit-decoration" aria-hidden="true"></div>
       </article>
-      <article class="summary-card accent-card">
-        <span class="card-label">Мой средний</span>
-        <strong><span id="avg-coefficient">—</span><small>x</small></strong>
-        <span class="card-note">за всё время</span>
-      </article>
+
+      <div class="metric-grid">
+        <article class="metric-card"><span class="metric-icon income-icon">↗</span><span class="metric-label">Доходы всего</span><strong id="gross-income">—</strong></article>
+        <article class="metric-card"><span class="metric-icon expense-icon">↘</span><span class="metric-label">Расходы</span><strong id="total-expenses">—</strong></article>
+        <article class="metric-card"><span class="metric-icon hours-icon">◷</span><span class="metric-label">На линии</span><strong id="hours-worked">—</strong></article>
+      </div>
+
+      <section class="section-block">
+        <div class="section-heading"><div><p class="eyebrow">РАСХОДЫ</p><h2>Куда уходят деньги</h2></div></div>
+        <article class="expense-breakdown" id="expense-breakdown"></article>
+      </section>
+
+      <section class="section-block">
+        <div class="section-heading"><div><p class="eyebrow">ДИНАМИКА</p><h2>Чистый доход</h2></div><span class="muted small-label">7 дней</span></div>
+        <article class="chart-card"><div id="week-chart" class="week-chart"><p class="loading">Загружаем статистику…</p></div></article>
+      </section>
+
+      <section class="section-block">
+        <div class="section-heading"><div><p class="eyebrow">ПО ДАННЫМ ВОДИТЕЛЕЙ</p><h2>Куда направиться</h2></div><button class="text-button" data-open-view="districts">Все районы</button></div>
+        <div id="recommendations" class="recommendations"><p class="loading">Подбираем районы…</p></div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-heading"><div><p class="eyebrow">ИСТОРИЯ</p><h2>Последние смены</h2></div><button class="text-button" data-open-view="shifts">Добавить</button></div>
+        <div id="recent-shifts" class="recent-list"><p class="empty-note">Добавь первую смену — здесь появится история.</p></div>
+      </section>
     </section>
 
-    <section class="section">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">НА ЭТОТ ЧАС</p>
-          <h2>Куда ехать</h2>
-        </div>
-        <span class="live-pill"><i></i> прогноз</span>
-      </div>
-      <div id="recommendations" class="recommendations">
-        <div class="loading">Загружаем прогноз…</div>
-      </div>
-      <p class="muted footnote">Средние значения за последние 30 дней в похожее время.</p>
+    <section class="view" id="view-districts">
+      <div class="page-intro"><p class="eyebrow">СПРОС В ГОРОДЕ</p><h2>Районы Москвы</h2><p>132 района в 12 административных округах. Выбери район, чтобы отправить свежий коэффициент.</p></div>
+      <label class="search-box"><span>⌕</span><input id="district-search" type="search" placeholder="Найти район или округ"></label>
+      <div id="district-groups" class="district-groups"><p class="loading">Загружаем районы…</p></div>
+
+      <section class="form-card coefficient-card">
+        <div class="form-heading"><span class="form-icon">↗</span><div><p class="eyebrow">ПОМОГИ СООБЩЕСТВУ</p><h3>Сообщить коэффициент</h3></div></div>
+        <form id="coefficient-form" class="data-form">
+          <label for="coefficient-district">Район</label>
+          <select id="coefficient-district" name="district" required><option value="">Выбери район</option></select>
+          <div class="form-row">
+            <div class="field"><label for="coefficient">Коэффициент</label><div class="number-wrap"><input id="coefficient" name="coefficient" type="number" min="0.5" max="5" step="0.1" placeholder="1.8" required><span>x</span></div></div>
+            <div class="field"><label for="weather">Погода</label><select id="weather" name="weather"><option value="">Не указывать</option><option>Ясно</option><option>Облачно</option><option>Дождь</option><option>Снег</option><option>Туман</option><option>Гроза</option></select></div>
+          </div>
+          <button class="primary-button" type="submit">Отправить коэффициент <span>→</span></button>
+        </form>
+        <p id="coefficient-message" class="form-message" role="status"></p>
+      </section>
     </section>
 
-    <section class="section">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">СПРОС ПО РАЙОНАМ</p>
-          <h2>Карта спроса</h2>
+    <section class="view" id="view-shifts">
+      <div class="page-intro"><p class="eyebrow">ЛИЧНЫЕ ФИНАНСЫ</p><h2>Новая смена</h2><p>Запиши выручку и расходы, чтобы видеть реальный доход после затрат.</p></div>
+      <form id="shift-form" class="form-card data-form">
+        <div class="form-heading"><span class="form-icon">₽</span><div><p class="eyebrow">ИТОГИ РАБОТЫ</p><h3>Доходы</h3></div></div>
+        <label for="shift-district">Район работы <span class="optional">необязательно</span></label>
+        <select id="shift-district" name="district"><option value="">Не указывать</option></select>
+        <div class="form-row">
+          <div class="field"><label for="gross-income-input">Выручка, ₽</label><input id="gross-income-input" name="gross_income" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="Например, 8500" required></div>
+          <div class="field"><label for="tips-input">Чаевые, ₽</label><input id="tips-input" name="tips" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
         </div>
-      </div>
-      <div class="map-frame">
-        <img id="demand-map" alt="Карта спроса такси по районам Москвы" hidden>
-        <div id="map-loading" class="loading">Строим карту…</div>
-      </div>
-    </section>
+        <div class="form-row">
+          <div class="field"><label for="hours-input">Часов на линии</label><input id="hours-input" name="hours_worked" type="number" min="0" max="24" step="0.5" inputmode="decimal" placeholder="Например, 8"></div>
+          <div class="field"><label for="fuel-cost-input">Топливо, ₽</label><input id="fuel-cost-input" name="fuel_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
+        </div>
 
-    <section class="section submit-section">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">ПОМОГИ КОЛЛЕГАМ</p>
-          <h2>Добавить коэффициент</h2>
-        </div>
-      </div>
-      <form id="coefficient-form">
-        <label for="district">Район</label>
-        <select id="district" name="district" required>
-          <option value="">Выбери район</option>
-        </select>
-        <label for="coefficient">Коэффициент</label>
-        <div class="input-wrap"><input id="coefficient" name="coefficient" type="number" min="0.5" max="5" step="0.1" placeholder="Например, 1.8" required><span>x</span></div>
-        <label for="weather">Погода</label>
-        <select id="weather" name="weather">
-          <option value="">Не указывать</option>
-          <option>Ясно</option>
-          <option>Облачно</option>
-          <option>Дождь</option>
-          <option>Снег</option>
-          <option>Туман</option>
-          <option>Гроза</option>
-        </select>
-        <button class="primary-button" type="submit">Отправить данные <span>→</span></button>
+        <details class="expense-details">
+          <summary><span>Добавить остальные расходы</span><span class="summary-plus">＋</span></summary>
+          <div class="form-row">
+            <div class="field"><label for="commission-cost-input">Комиссии, ₽</label><input id="commission-cost-input" name="commission_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
+            <div class="field"><label for="maintenance-cost-input">Обслуживание, ₽</label><input id="maintenance-cost-input" name="maintenance_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
+          </div>
+          <div class="field"><label for="other-cost-input">Другие расходы, ₽</label><input id="other-cost-input" name="other_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
+        </details>
+
+        <div class="net-preview"><span>Чистый доход за смену</span><strong id="shift-net-preview">0 ₽</strong></div>
+        <button id="save-shift" class="primary-button" type="submit">Сохранить смену <span>→</span></button>
+        <p id="shift-message" class="form-message" role="status"></p>
       </form>
-      <p id="form-message" class="form-message" role="status"></p>
+
+      <section class="section-block shifts-history">
+        <div class="section-heading"><div><p class="eyebrow">ЗАПИСИ</p><h2>Смены за период</h2></div></div>
+        <div id="shift-history" class="recent-list"></div>
+      </section>
     </section>
 
-    <footer>Данные сообщества водителей · Taxi Forecast</footer>
+    <footer class="app-footer">Доходы и расходы видны только тебе</footer>
   </main>
   <div id="toast" class="toast" role="status"></div>
 </body>
