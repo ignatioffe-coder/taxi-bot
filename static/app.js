@@ -6,21 +6,20 @@
     currency: "RUB",
     maximumFractionDigits: 0,
   });
+  const hasTelegramAuth = Boolean(tg && tg.initData);
   let workType = "taxi";
   let period = "week";
   let districtGroups = [];
 
-  if (!tg || !tg.initData) {
-    $("recommendations").innerHTML =
-      '<p class="empty-note">Открой приложение из Telegram, чтобы увидеть свои данные.</p>';
-    return;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    if (tg.setHeaderColor) tg.setHeaderColor("#11151b");
+    if (tg.setBackgroundColor) tg.setBackgroundColor("#11151b");
   }
-
-  tg.ready();
-  tg.expand();
-  if (tg.setHeaderColor) tg.setHeaderColor("#11151b");
-  if (tg.setBackgroundColor) tg.setBackgroundColor("#11151b");
-  const headers = { "X-Telegram-Init-Data": tg.initData };
+  const headers = hasTelegramAuth
+    ? { "X-Telegram-Init-Data": tg.initData }
+    : {};
 
   function showToast(message) {
     const toast = $("toast");
@@ -31,13 +30,20 @@
 
   function showError(error) {
     if (error.status === 401) {
-      showToast("Сессия Telegram устарела. Закрой и открой приложение снова.");
+      showToast(hasTelegramAuth
+        ? "Сессия Telegram устарела. Закрой и открой приложение снова."
+        : "Открой Mini App кнопкой в Telegram, чтобы загрузить данные.");
     } else {
       showToast(error.message || "Не удалось выполнить запрос. Попробуй ещё раз.");
     }
   }
 
   async function api(path, options = {}) {
+    if (!hasTelegramAuth) {
+      const error = new Error("Telegram authorization is required");
+      error.status = 401;
+      throw error;
+    }
     const response = await fetch(path, {
       ...options,
       headers: { ...headers, ...(options.headers || {}) },
@@ -69,7 +75,7 @@
     document.querySelectorAll("[data-work-type]").forEach((button) => {
       button.classList.toggle("active", button.dataset.workType === value);
     });
-    loadDashboard().catch(showError);
+    if (hasTelegramAuth) loadDashboard().catch(showError);
   }
 
   function setPeriod(value) {
@@ -77,7 +83,7 @@
     document.querySelectorAll(".period-button").forEach((button) => {
       button.classList.toggle("active", button.dataset.period === value);
     });
-    loadDashboard().catch(showError);
+    if (hasTelegramAuth) loadDashboard().catch(showError);
   }
 
   function fillDistrictSelect(select, placeholder, selectedValue = "") {
@@ -373,7 +379,13 @@
   document.querySelectorAll(".period-button").forEach((button) => {
     button.addEventListener("click", () => setPeriod(button.dataset.period));
   });
-  $("refresh").addEventListener("click", () => loadDashboard().catch(showError));
+  $("refresh").addEventListener("click", () => {
+    if (hasTelegramAuth) {
+      loadDashboard().catch(showError);
+    } else {
+      showError({ status: 401 });
+    }
+  });
   $("district-search").addEventListener("input", applyDistrictSearch);
   $("shift-form").addEventListener("input", updateShiftPreview);
 
@@ -394,7 +406,7 @@
       });
       $("coefficient").value = "";
       $("coefficient-message").textContent = "Спасибо! Коэффициент добавлен.";
-      if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
       await loadDashboard();
     } catch (error) {
       showError(error);
@@ -431,7 +443,7 @@
       $("shift-district").value = selectedDistrict;
       updateShiftPreview();
       $("shift-message").textContent = "Смена сохранена. Хорошая работа!";
-      if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
       await loadDashboard();
       setView("overview");
     } catch (error) {
@@ -445,5 +457,15 @@
   $("today-label").textContent = new Intl.DateTimeFormat("ru-RU", {
     weekday: "long", day: "numeric", month: "long",
   }).format(now).toLocaleUpperCase("ru");
-  loadDashboard().catch(showError);
+  if (hasTelegramAuth) {
+    loadDashboard().catch(showError);
+  } else {
+    const notice = '<p class="empty-note">Открой Mini App кнопкой в Telegram, чтобы загрузить данные.</p>';
+    $("recommendations").innerHTML = notice;
+    $("district-groups").innerHTML = notice;
+    $("week-chart").innerHTML = notice;
+    $("expense-breakdown").innerHTML = notice;
+    $("recent-shifts").innerHTML = notice;
+    $("shift-history").innerHTML = notice;
+  }
 })();
