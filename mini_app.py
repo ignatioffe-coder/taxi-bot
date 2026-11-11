@@ -117,8 +117,6 @@ async def index(_request: web.Request) -> web.FileResponse:
     response = web.FileResponse(STATIC_DIR / "index.html")
     response.headers["Cache-Control"] = "no-store"
     return response
-
-
 def _build_district_groups(market_stats: dict) -> list[dict]:
     return [
         {
