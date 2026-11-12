@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#11151b">
   <title>Taxi Forecast</title>
-  <link rel="stylesheet" href="/static/styles.css?v=25">
+  <link rel="stylesheet" href="/static/styles.css?v=26">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/static/app.js?v=25" defer></script>
+  <script src="/static/app.js?v=26" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -165,12 +165,13 @@
         <div class="form-heading"><span class="form-icon">₽</span><div><p class="eyebrow">ИТОГИ РАБОТЫ</p><h3>Доходы</h3></div></div>
         <label for="shift-district">Район работы <span class="optional">необязательно</span></label>
         <select id="shift-district" name="district"><option value="">Не указывать</option></select>
+        <p class="field-hint">Район нужен, чтобы смена попала в персональный прогноз районов.</p>
         <div class="form-row">
           <div class="field"><label for="gross-income-input">Выручка, ₽</label><input id="gross-income-input" name="gross_income" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="Например, 8500" required></div>
           <div class="field"><label for="tips-input">Чаевые, ₽</label><input id="tips-input" name="tips" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
         </div>
         <div class="form-row">
-          <div class="field"><label for="hours-input">Часов на линии</label><input id="hours-input" name="hours_worked" type="number" min="0" max="24" step="0.5" inputmode="decimal" placeholder="Например, 8"></div>
+          <div class="field"><label for="hours-input">Часов на линии</label><input id="hours-input" name="hours_worked" type="number" min="0" max="24" step="0.5" inputmode="decimal" placeholder="Например, 8"><p class="field-hint">Без часов не посчитать доход в час.</p></div>
           <div class="field"><label for="fuel-cost-input">Топливо, ₽</label><input id="fuel-cost-input" name="fuel_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
         </div>
         <div class="form-row">

@@ -817,6 +817,12 @@
       : "ЛИЧНАЯ АНАЛИТИКА";
     $("forecast-note").textContent = forecast.note || "";
     container.replaceChildren();
+    (forecast.hints || []).forEach((text) => {
+      const hint = document.createElement("p");
+      hint.className = "forecast-hint";
+      hint.textContent = text;
+      container.appendChild(hint);
+    });
     if (!items.length) {
       const empty = document.createElement("p");
       empty.className = "empty-note";
@@ -888,6 +894,35 @@
       card.append(rank, info, score);
       container.appendChild(card);
     });
+    container.appendChild(renderMethod(forecast));
+  }
+
+  function renderMethod(forecast) {
+    const factorLabels = {
+      weather: "погода",
+      poi_density: "плотность заведений",
+      airports: "аэропорты",
+      events: "мероприятия",
+      reports: "сообщения водителей",
+    };
+    const factors = forecast.factors || {};
+    const used = Object.entries(factorLabels)
+      .filter(([key]) => factors[key])
+      .map(([, label]) => label);
+
+    const block = document.createElement("details");
+    block.className = "forecast-method";
+    const summary = document.createElement("summary");
+    summary.textContent = "Как считается прогноз";
+    const first = document.createElement("p");
+    first.textContent = used.length
+      ? `Сейчас участвуют: ${used.join(", ")}.`
+      : "Внешние данные сейчас недоступны, оценка построена по вашей истории.";
+    const second = document.createElement("p");
+    second.textContent = "Балл 0–100 сравнивает районы между собой, это не число заказов. " +
+      "60 минут — основная оценка, 30 и 120 показывают ожидаемый сдвиг по типичному профилю суток.";
+    block.append(summary, first, second);
+    return block;
   }
 
   $("horizon-switch").addEventListener("click", (event) => {

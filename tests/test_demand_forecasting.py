@@ -122,5 +122,26 @@ class DemandForecastingTests(unittest.TestCase):
         self.assertEqual(courier["items"], [])
 
 
+class CourierHintTests(unittest.TestCase):
+    now = datetime(2026, 1, 7, 12, 0)
+
+    def test_excluded_shifts_produce_explaining_hints(self):
+        inputs = {
+            "shifts": [],
+            "excluded": {"no_district": 1, "no_hours": 2},
+            "other_direction_shifts": 1,
+        }
+        forecast = build_forecast("courier", inputs, now=self.now)
+        hints = forecast["hints"]
+        self.assertEqual(len(hints), 3)
+        self.assertTrue(any("без района" in hint for hint in hints))
+        self.assertTrue(any("без часов" in hint for hint in hints))
+        self.assertTrue(any("другом направлении" in hint for hint in hints))
+
+    def test_no_hints_when_everything_counted(self):
+        forecast = build_forecast("courier", {"shifts": []}, now=self.now)
+        self.assertEqual(forecast["hints"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

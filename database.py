@@ -1578,7 +1578,43 @@ def get_demand_forecast_inputs(
                 current_time.strftime("%Y-%m-%d %H:%M:%S"),
             ),
         ).fetchall()
-        return {"reports": [], "shifts": [dict(row) for row in rows]}
+        # Смены, которые не попадут в прогноз, считаем отдельно: иначе
+        # пользователь не понимает, почему его смена «не видна» (ТЗ, п. 8).
+        counts = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN district IS NULL OR district = '' THEN 1 ELSE 0 END)
+                    AS no_district,
+                SUM(CASE WHEN district IS NOT NULL AND district <> ''
+                              AND hours_worked <= 0 THEN 1 ELSE 0 END)
+                    AS no_hours
+            FROM work_shifts
+            WHERE user_id = ? AND work_type = ?
+              AND timestamp >= ? AND timestamp <= ?
+            """,
+            (
+                user_id,
+                work_type,
+                since,
+                current_time.strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        ).fetchone()
+        other_direction = conn.execute(
+            """
+            SELECT COUNT(*) FROM work_shifts
+            WHERE user_id = ? AND work_type <> ? AND timestamp >= ?
+            """,
+            (user_id, work_type, since),
+        ).fetchone()[0]
+        return {
+            "reports": [],
+            "shifts": [dict(row) for row in rows],
+            "excluded": {
+                "no_district": int(counts["no_district"] or 0),
+                "no_hours": int(counts["no_hours"] or 0),
+            },
+            "other_direction_shifts": int(other_direction or 0),
+        }
 
 
 def get_driver_directions(user_id: int) -> List[str]:

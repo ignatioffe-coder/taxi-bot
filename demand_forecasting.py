@@ -262,6 +262,29 @@ def _taxi_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
     }
 
 
+def _courier_hints(inputs: dict) -> list[str]:
+    """Почему часть смен не участвует в прогнозе — простым языком."""
+    hints: list[str] = []
+    excluded = inputs.get("excluded") or {}
+    if excluded.get("no_district"):
+        hints.append(
+            f"{excluded['no_district']} смен(и) без района не учитываются — "
+            "укажи район при сохранении."
+        )
+    if excluded.get("no_hours"):
+        hints.append(
+            f"{excluded['no_hours']} смен(и) без часов не учитываются — "
+            "укажи длительность смены, иначе доход в час не посчитать."
+        )
+    other = inputs.get("other_direction_shifts") or 0
+    if other:
+        hints.append(
+            f"Ещё {other} смен(и) записаны в другом направлении: такси и "
+            "доставка считаются отдельно."
+        )
+    return hints
+
+
 def _baseline_items(
     factors: dict, now: datetime, skip: set[str] | None = None
 ) -> list[dict]:
@@ -305,7 +328,9 @@ def _baseline_items(
     return items
 
 
-def _courier_poi_baseline(factors: dict, now: datetime) -> dict | None:
+def _courier_poi_baseline(
+    factors: dict, now: datetime, inputs: dict | None = None
+) -> dict | None:
     """Стартовая оценка районов без личных смен — по плотности заведений.
 
     Решает холодный старт: у нового пользователя нет истории, но плотность
@@ -336,6 +361,7 @@ def _courier_poi_baseline(factors: dict, now: datetime) -> dict | None:
             "и сообщения курьеров." + weather_suffix
         ),
         "empty_message": "Нет данных о плотности заведений.",
+        "hints": _courier_hints(inputs or {}),
         "items": items[:7],
     }
 
@@ -406,7 +432,7 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
         if total["hours"] > 0
     }
     if not rates:
-        baseline = _courier_poi_baseline(factors, now)
+        baseline = _courier_poi_baseline(factors, now, inputs)
         if baseline is not None:
             return baseline
         return {
@@ -422,6 +448,7 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
                 "Пока нет подходящих смен. Указывай район и часы при сохранении "
                 "курьерской смены."
             ),
+            "hints": _courier_hints(inputs),
             "items": [],
         }
 
@@ -533,6 +560,7 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             + weather_suffix + blend_suffix
         ),
         "empty_message": "Нет сохранённых смен с районом и часами работы.",
+        "hints": _courier_hints(inputs),
         "items": items[:7],
     }
 
