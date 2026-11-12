@@ -8,4 +8,4 @@ taxi_data.db
 venv/
 .venv/
 maps/
-.pytest_cache/
+.pytest_cache/tmp*/

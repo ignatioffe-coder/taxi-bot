@@ -1,5 +1,4 @@
 import os
-import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -89,11 +88,14 @@ class EventImpactTests(unittest.TestCase):
         self.assertGreater(big["Лужники"], small["Лужники"])
 
     def test_missing_file_and_broken_json_are_safe(self):
-        missing = Path(tempfile.mkdtemp()) / "nope.json"
-        self.assertEqual(events.load_events(missing), [])
-        broken = Path(tempfile.mkdtemp()) / "broken.json"
-        broken.write_text("{не json", encoding="utf-8")
-        self.assertEqual(events.load_events(broken), [])
+        base = Path(__file__).resolve().parent
+        self.assertEqual(events.load_events(base / "no-such-events.json"), [])
+        broken = base / "broken-events.json"
+        try:
+            broken.write_text("{не json", encoding="utf-8")
+            self.assertEqual(events.load_events(broken), [])
+        finally:
+            broken.unlink(missing_ok=True)
 
     def test_real_events_file_is_valid(self):
         self.assertIsInstance(events.load_events(), list)
