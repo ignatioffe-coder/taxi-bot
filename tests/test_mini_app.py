@@ -13,9 +13,19 @@ from urllib.parse import urlencode
 os.environ.setdefault("BOT_TOKEN", "test-bot-token")
 
 import config
+import subscriptions
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from mini_app import create_app, validate_init_data
+
+
+class FakePaymentBot:
+    def __init__(self):
+        self.invoice_calls = []
+
+    async def create_invoice_link(self, **kwargs):
+        self.invoice_calls.append(kwargs)
+        return "https://t.me/$test_invoice"
 
 
 def signed_init_data(user: dict, bot_token: str, auth_date: int) -> str:
@@ -59,7 +69,8 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         import database
 
         database.init_db()
-        self.client = TestClient(TestServer(create_app()))
+        self.payment_bot = FakePaymentBot()
+        self.client = TestClient(TestServer(create_app(self.payment_bot)))
         await self.client.start_server()
         self.init_data = signed_init_data(
             {"id": 123456, "first_name": "Driver", "username": "driver"},
@@ -108,8 +119,13 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             132,
         )
 
-    async def test_district_catalog_is_public(self):
+    async def test_district_catalog_requires_an_active_trial_or_subscription(self):
         response = await self.client.get("/api/districts")
+        self.assertEqual(response.status, 401)
+
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        response = await self.client.get("/api/districts", headers=headers)
         self.assertEqual(response.status, 200)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         catalog = await response.json()
@@ -117,6 +133,124 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             sum(len(group["districts"]) for group in catalog["district_groups"]),
             132,
+        )
+
+    async def test_trial_expires_once_and_blocks_paid_features(self):
+        import database
+
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        access = database.get_subscription_access(123456)
+        self.assertEqual(access["status"], "trial")
+        self.assertEqual(
+            access["trial_expires_at"] - access["trial_started_at"],
+            subscriptions.TRIAL_SECONDS,
+        )
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                "UPDATE user_subscriptions SET trial_expires_at = ? WHERE user_id = ?",
+                (int(time.time()) - 1, 123456),
+            )
+            conn.commit()
+        profile_response = await self.client.get("/api/profile", headers=headers)
+        profile = await profile_response.json()
+        self.assertEqual(profile["subscription"]["status"], "expired")
+        self.assertFalse(profile["subscription"]["active"])
+
+        dashboard_response = await self.client.get(
+            "/api/dashboard?work_type=taxi&period=week",
+            headers=headers,
+        )
+        self.assertEqual(dashboard_response.status, 402)
+        districts_response = await self.client.get("/api/districts", headers=headers)
+        self.assertEqual(districts_response.status, 402)
+
+        later_access = database.get_subscription_access(
+            123456, now=int(time.time()) + subscriptions.TRIAL_SECONDS
+        )
+        self.assertEqual(later_access["status"], "expired")
+        self.assertEqual(
+            later_access["trial_started_at"], access["trial_started_at"]
+        )
+
+    async def test_stars_invoice_requires_terms_and_activates_recurring_access(self):
+        import database
+
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                "UPDATE user_subscriptions SET trial_expires_at = ? WHERE user_id = ?",
+                (int(time.time()) - 1, 123456),
+            )
+            conn.commit()
+
+        response = await self.client.post(
+            "/api/subscription/invoice",
+            headers=headers,
+            json={"accept_terms": False},
+        )
+        self.assertEqual(response.status, 400)
+        self.assertEqual(self.payment_bot.invoice_calls, [])
+
+        response = await self.client.post(
+            "/api/subscription/invoice",
+            headers=headers,
+            json={"accept_terms": True},
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["invoice_url"], "https://t.me/$test_invoice")
+        invoice = self.payment_bot.invoice_calls[0]
+        self.assertEqual(invoice["currency"], "XTR")
+        self.assertEqual(invoice["prices"][0].amount, subscriptions.MONTHLY_PRICE_STARS)
+        self.assertEqual(
+            invoice["subscription_period"],
+            subscriptions.SUBSCRIPTION_PERIOD_SECONDS,
+        )
+        self.assertTrue(
+            database.validate_star_invoice(
+                123456,
+                invoice["payload"],
+                "XTR",
+                subscriptions.MONTHLY_PRICE_STARS,
+            )
+        )
+        self.assertFalse(
+            database.validate_star_invoice(
+                123456,
+                invoice["payload"],
+                "XTR",
+                subscriptions.MONTHLY_PRICE_STARS - 1,
+            )
+        )
+
+        expiration = int(time.time()) + subscriptions.SUBSCRIPTION_PERIOD_SECONDS
+        self.assertTrue(database.record_star_payment(
+            123456,
+            invoice["payload"],
+            "XTR",
+            subscriptions.MONTHLY_PRICE_STARS,
+            "charge-1",
+            expiration,
+        ))
+        self.assertTrue(database.record_star_payment(
+            123456,
+            invoice["payload"],
+            "XTR",
+            subscriptions.MONTHLY_PRICE_STARS,
+            "charge-1",
+            expiration,
+        ))
+        self.assertEqual(database.get_subscription_access(123456)["status"], "paid")
+        self.assertEqual(
+            (
+                await self.client.get(
+                    "/api/dashboard?work_type=taxi&period=week",
+                    headers=headers,
+                )
+            ).status,
+            200,
         )
 
     async def test_serves_mini_app_assets(self):

@@ -19,6 +19,7 @@
   let coefficientAreas = null;
   let coefficientMapDataSignature = null;
   let preferredName = "";
+  let currentSubscription = null;
   let activeMapTouches = 0;
   let viewportFitPending = false;
   let viewportFitTimer = null;
@@ -45,7 +46,28 @@
     window.setTimeout(() => toast.classList.remove("visible"), 3000);
   }
 
+  function showSubscriptionScreen(subscription = currentSubscription) {
+    const access = subscription || {};
+    const title = $("subscription-title");
+    const status = $("subscription-status");
+    $("subscription-price-amount").textContent = `${access.price_stars || 300} ⭐`;
+    $("subscription-period-label").textContent =
+      `за ${access.period_days || 30} дней · автопродление`;
+    title.textContent = access.status === "paid"
+      ? "Подписка активна"
+      : "Пробный период закончился";
+    if (access.status === "paid" && access.paid_until) {
+      status.textContent = `Доступ открыт до ${new Date(access.paid_until * 1000).toLocaleDateString("ru-RU")}.`;
+    } else if (access.trial_expires_at) {
+      status.textContent = `Бесплатный период завершился ${new Date(access.trial_expires_at * 1000).toLocaleDateString("ru-RU")}. Оформи подписку, чтобы продолжить.`;
+    } else {
+      status.textContent = "После 7 дней бесплатно оформи подписку, чтобы пользоваться Taxi Forecast.";
+    }
+    $("subscription-screen").hidden = false;
+  }
+
   function showError(error) {
+    if (error.status === 402) return;
     if (error.status === 401) {
       showToast(hasTelegramAuth
         ? "Telegram не смог подтвердить сессию. Проверь BOT_TOKEN в BotHost и перезапусти бота."
@@ -71,20 +93,15 @@
           ? "Проверь данные и обязательные поля."
           : response.status === 403
             ? "Сначала заполни профиль: укажи имя и вид работы."
+          : response.status === 409
+            ? "Пробный период или подписка ещё активны."
           : "Сервис временно недоступен. Попробуй ещё раз.",
       );
       error.status = response.status;
+      if (response.status === 402) showSubscriptionScreen();
       throw error;
     }
     return response;
-  }
-
-  async function loadDistrictCatalog() {
-    const response = await fetch("/api/districts");
-    if (!response.ok) throw new Error("Не удалось загрузить список районов.");
-    const data = await response.json();
-    renderDistricts(data.district_groups);
-    await loadMapResources();
   }
 
   async function loadMapResources() {
@@ -116,8 +133,7 @@
   }
 
   async function refreshMarketStats() {
-    const response = await fetch("/api/districts", { cache: "no-store" });
-    if (!response.ok) throw new Error("Не удалось обновить коэффициенты районов.");
+    const response = await api("/api/districts", { cache: "no-store" });
     const data = await response.json();
     renderDistricts(data.district_groups);
   }
@@ -675,6 +691,7 @@
 
   async function loadProfile() {
     const profile = await (await api("/api/profile")).json();
+    currentSubscription = profile.subscription;
     const form = $("profile-form");
     const profileFields = [
       "work_type", "vehicle_type", "vehicle_make", "vehicle_model", "vehicle_year",
@@ -696,6 +713,68 @@
     renderDocumentStatuses(profile);
     return profile;
   }
+
+  async function refreshAfterPayment() {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 700));
+      const profile = await loadProfile();
+      if (profile.subscription && profile.subscription.active) {
+        $("subscription-screen").hidden = true;
+        await loadDashboard();
+        return;
+      }
+    }
+    $("subscription-message").textContent =
+      "Платёж принят. Доступ обновится в ближайшее время — нажми «Обновить».";
+  }
+
+  $("subscription-consent").addEventListener("change", (event) => {
+    $("subscribe-button").disabled = !event.currentTarget.checked;
+  });
+  document.querySelector(".subscription-consent a").addEventListener("click", () => {
+    $("subscription-terms").open = true;
+  });
+  $("premium-bot-link").addEventListener("click", (event) => {
+    if (tg && tg.openTelegramLink) {
+      event.preventDefault();
+      tg.openTelegramLink(event.currentTarget.href);
+    }
+  });
+  $("subscribe-button").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    $("subscription-message").textContent = "Готовим счёт Telegram Stars…";
+    try {
+      const result = await (await api("/api/subscription/invoice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accept_terms: $("subscription-consent").checked }),
+      })).json();
+      $("subscription-message").textContent = "";
+      if (tg && typeof tg.openInvoice === "function") {
+        tg.openInvoice(result.invoice_url, (status) => {
+          if (status === "paid") {
+            refreshAfterPayment().catch(showError);
+          } else if (status === "failed") {
+            $("subscription-message").textContent = "Не удалось выполнить платёж. Попробуй ещё раз.";
+          } else if (status === "cancelled") {
+            $("subscription-message").textContent = "Оплата отменена.";
+          }
+          button.disabled = !$("subscription-consent").checked;
+        });
+      } else if (tg && tg.openTelegramLink) {
+        tg.openTelegramLink(result.invoice_url);
+      } else if (tg && tg.openLink) {
+        tg.openLink(result.invoice_url);
+      } else {
+        window.location.assign(result.invoice_url);
+      }
+    } catch (error) {
+      showError(error);
+      $("subscription-message").textContent = error.message || "Не удалось создать счёт.";
+      button.disabled = !$("subscription-consent").checked;
+    }
+  });
 
   async function loadDashboard() {
     const query = new URLSearchParams({ work_type: workType, period });
@@ -830,6 +909,11 @@
       if (!profile.onboarding_complete) {
         throw new Error("Не удалось сохранить профиль. Попробуй ещё раз.");
       }
+      if (!profile.subscription || !profile.subscription.active) {
+        $("onboarding-screen").hidden = true;
+        showSubscriptionScreen(profile.subscription);
+        return;
+      }
       await loadDashboard();
       $("onboarding-screen").hidden = true;
       if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
@@ -927,10 +1011,19 @@
           $("onboarding-name").focus();
           return;
         }
+        if (!profile.subscription || !profile.subscription.active) {
+          onboardingScreen.hidden = true;
+          showSubscriptionScreen(profile.subscription);
+          return;
+        }
         await loadDashboard();
         onboardingScreen.hidden = true;
         loadMapResources().catch(showError);
       } catch (error) {
+        if (error.status === 402) {
+          onboardingScreen.hidden = true;
+          return;
+        }
         $("onboarding-message").textContent = "Не удалось проверить профиль. Обнови приложение.";
         showError(error);
       }
@@ -943,10 +1036,9 @@
     $("expense-breakdown").innerHTML = notice;
     $("recent-shifts").innerHTML = notice;
     $("shift-history").innerHTML = notice;
-    loadDistrictCatalog().catch(showError);
   }
   const refreshVisibleMarketStats = () => {
-    if (!document.hidden) refreshMarketStats().catch(showError);
+    if (hasTelegramAuth && !document.hidden) refreshMarketStats().catch(showError);
   };
   window.setInterval(refreshVisibleMarketStats, 60_000);
   document.addEventListener("visibilitychange", () => {
