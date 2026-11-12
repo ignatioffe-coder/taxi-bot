@@ -67,6 +67,16 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             int(time.time()),
         )
 
+    async def complete_onboarding(self, headers=None, name="Driver", work_type="taxi"):
+        headers = headers or {"X-Telegram-Init-Data": self.init_data}
+        await self.client.get("/api/profile", headers=headers)
+        response = await self.client.post(
+            "/api/onboarding",
+            headers=headers,
+            json={"name": name, "work_type": work_type},
+        )
+        self.assertEqual(response.status, 200)
+
     async def asyncTearDown(self):
         await self.client.close()
         config.DB_PATH = self.previous_db_path
@@ -76,9 +86,17 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/api/dashboard")
         self.assertEqual(response.status, 401)
 
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.client.get("/api/profile", headers=headers)
         response = await self.client.get(
             "/api/dashboard?work_type=taxi&period=week",
-            headers={"X-Telegram-Init-Data": self.init_data},
+            headers=headers,
+        )
+        self.assertEqual(response.status, 403)
+        await self.complete_onboarding(headers)
+        response = await self.client.get(
+            "/api/dashboard?work_type=taxi&period=week",
+            headers=headers,
         )
         self.assertEqual(response.status, 200)
         dashboard = await response.json()
@@ -173,6 +191,8 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         profile = await response.json()
         self.assertEqual(profile["work_type"], "taxi")
         self.assertTrue(profile["reminders_enabled"])
+        self.assertFalse(profile["onboarding_complete"])
+        await self.complete_onboarding(headers, name="Анна", work_type="courier")
 
         import database
 
@@ -217,6 +237,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_profile_rejects_invalid_document_dates_and_flags(self):
         headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
         payload = {
             "work_type": "taxi",
             "vehicle_type": "",
@@ -245,6 +266,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_submission_validates_district_and_saves_for_verified_user(self):
         headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
         response = await self.client.post(
             "/api/coefficients",
             headers=headers,
@@ -270,6 +292,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_shift_submission_and_period_totals(self):
         headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
         payload = {
             "work_type": "taxi",
             "district": config.MOSCOW_DISTRICTS[0],
@@ -310,6 +333,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_shift_rejects_invalid_values(self):
         headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
         response = await self.client.post(
             "/api/shifts",
             headers=headers,
@@ -320,6 +344,69 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(response.status, 400)
+
+    async def test_onboarding_saves_name_and_work_type_only_once(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        response = await self.client.get("/api/profile", headers=headers)
+        self.assertFalse((await response.json())["onboarding_complete"])
+
+        response = await self.client.post(
+            "/api/onboarding",
+            headers=headers,
+            json={"name": " ", "work_type": "taxi"},
+        )
+        self.assertEqual(response.status, 400)
+
+        await self.complete_onboarding(headers, name="Аня", work_type="courier")
+        response = await self.client.post(
+            "/api/onboarding",
+            headers=headers,
+            json={"name": "Другое имя", "work_type": "taxi"},
+        )
+        self.assertEqual(response.status, 200)
+
+        response = await self.client.get("/api/profile", headers=headers)
+        profile = await response.json()
+        self.assertTrue(profile["onboarding_complete"])
+        self.assertEqual(profile["preferred_name"], "Аня")
+        self.assertEqual(profile["work_type"], "courier")
+
+        response = await self.client.get(
+            "/api/dashboard?work_type=courier&period=week",
+            headers=headers,
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual((await response.json())["user"]["first_name"], "Аня")
+
+    async def test_existing_users_stay_onboarded_after_schema_migration(self):
+        import database
+
+        legacy_path = os.path.join(self.temp_dir.name, "legacy.db")
+        previous_db_path = config.DB_PATH
+        try:
+            config.DB_PATH = legacy_path
+            with closing(sqlite3.connect(legacy_path)) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE users (
+                        user_id INTEGER PRIMARY KEY,
+                        username TEXT,
+                        first_name TEXT,
+                        last_name TEXT,
+                        joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        is_active INTEGER DEFAULT 1
+                    )
+                    """
+                )
+                conn.execute(
+                    "INSERT INTO users (user_id, first_name) VALUES (?, ?)",
+                    (789, "Existing"),
+                )
+                conn.commit()
+            database.init_db()
+            self.assertTrue(database.is_user_onboarded(789))
+        finally:
+            config.DB_PATH = previous_db_path
 
 
 if __name__ == "__main__":

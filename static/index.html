@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#11151b">
   <title>Taxi Forecast</title>
-  <link rel="stylesheet" href="/static/styles.css?v=9">
+  <link rel="stylesheet" href="/static/styles.css?v=10">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/static/app.js?v=13" defer></script>
+  <script src="/static/app.js?v=14" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -185,6 +185,25 @@
 
     <footer class="app-footer">Доходы и расходы видны только тебе</footer>
   </main>
+  <section id="onboarding-screen" class="onboarding-screen" hidden>
+    <div class="onboarding-card">
+      <div class="brand-mark" aria-hidden="true">T</div>
+      <p class="eyebrow">ПЕРВЫЙ ШАГ</p>
+      <h1>Расскажи о себе</h1>
+      <p class="onboarding-intro">Заполни профиль один раз, чтобы открыть Taxi Forecast.</p>
+      <form id="onboarding-form" class="data-form" hidden>
+        <label for="onboarding-name">Как тебя зовут? Только имя</label>
+        <input id="onboarding-name" name="name" type="text" maxlength="40" autocomplete="given-name" required>
+        <fieldset class="onboarding-options">
+          <legend>Кем ты работаешь?</legend>
+          <label><input type="radio" name="work_type" value="taxi" required><span>🚕 Такси</span></label>
+          <label><input type="radio" name="work_type" value="courier" required><span>📦 Курьер</span></label>
+        </fieldset>
+        <button id="complete-onboarding" class="primary-button" type="submit">Продолжить <span>→</span></button>
+      </form>
+      <p id="onboarding-message" class="form-message" role="status">Проверяем профиль…</p>
+    </div>
+  </section>
   <div id="toast" class="toast" role="status"></div>
 </body>
 </html>

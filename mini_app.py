@@ -76,6 +76,20 @@ def _authenticated_user(request: web.Request) -> dict:
     return validate_init_data(init_data, config.BOT_TOKEN)
 
 
+async def _onboarded_user(request: web.Request) -> dict:
+    user = _authenticated_user(request)
+    await asyncio.to_thread(
+        database.add_user,
+        user["id"],
+        user.get("username", ""),
+        user.get("first_name", ""),
+        user.get("last_name", ""),
+    )
+    if not await asyncio.to_thread(database.is_user_onboarded, user["id"]):
+        raise web.HTTPForbidden(text="Complete your profile before using Taxi Forecast")
+    return user
+
+
 def _recommendations() -> list[dict]:
     now = config.get_moscow_time()
     month_ago = config.moscow_time_str(timedelta(days=-30))
@@ -166,7 +180,7 @@ def _period_start(period: str) -> datetime:
 
 
 async def dashboard(request: web.Request) -> web.Response:
-    user = _authenticated_user(request)
+    user = await _onboarded_user(request)
     work_type = request.query.get("work_type", "taxi")
     period = request.query.get("period", "week")
     if work_type not in WORK_TYPES:
@@ -185,10 +199,11 @@ async def dashboard(request: web.Request) -> web.Response:
         asyncio.to_thread(database.get_market_district_stats),
     )
     coefficient_stats = database.get_user_stats(user["id"])
+    profile = await asyncio.to_thread(database.get_driver_profile, user["id"])
     district_groups = _build_district_groups(market_stats)
     return web.json_response({
         "user": {
-            "first_name": user.get("first_name", ""),
+            "first_name": profile.get("preferred_name") or user.get("first_name", ""),
             "username": user.get("username", ""),
         },
         "work_type": work_type,
@@ -216,7 +231,7 @@ def _validated_amount(payload: dict, field: str, maximum: float = 1_000_000) -> 
 
 
 async def submit_shift(request: web.Request) -> web.Response:
-    user = _authenticated_user(request)
+    user = await _onboarded_user(request)
     try:
         payload = await request.json()
     except (json.JSONDecodeError, web.HTTPException):
@@ -238,12 +253,6 @@ async def submit_shift(request: web.Request) -> web.Response:
     }
     hours_worked = _validated_amount(payload, "hours_worked", maximum=24)
 
-    database.add_user(
-        user["id"],
-        user.get("username", ""),
-        user.get("first_name", ""),
-        user.get("last_name", ""),
-    )
     shift_id = await asyncio.to_thread(
         database.add_work_shift,
         user["id"],
@@ -280,6 +289,8 @@ def _profile_response(profile: dict) -> dict:
     result.update({
         "first_name": profile.get("first_name") or "",
         "last_name": profile.get("last_name") or "",
+        "preferred_name": profile.get("preferred_name") or "",
+        "onboarding_complete": bool(profile.get("onboarding_complete")),
     })
     return result
 
@@ -297,8 +308,40 @@ async def get_profile(request: web.Request) -> web.Response:
     return web.json_response(_profile_response(profile))
 
 
-async def save_profile(request: web.Request) -> web.Response:
+async def complete_onboarding(request: web.Request) -> web.Response:
     user = _authenticated_user(request)
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, web.HTTPException):
+        raise web.HTTPBadRequest(text="Request body must be valid JSON")
+    if not isinstance(payload, dict) or set(payload) != {"name", "work_type"}:
+        raise web.HTTPBadRequest(text="Name and work type are required")
+
+    name = payload["name"]
+    work_type = payload["work_type"]
+    if not isinstance(name, str) or not 1 <= len(name.strip()) <= 40:
+        raise web.HTTPBadRequest(text="Name must be between 1 and 40 characters")
+    if not isinstance(work_type, str) or work_type not in WORK_TYPES:
+        raise web.HTTPBadRequest(text="Choose taxi or courier")
+
+    await asyncio.to_thread(
+        database.add_user,
+        user["id"],
+        user.get("username", ""),
+        user.get("first_name", ""),
+        user.get("last_name", ""),
+    )
+    await asyncio.to_thread(
+        database.complete_onboarding,
+        user["id"],
+        name.strip(),
+        work_type,
+    )
+    return web.json_response({"completed": True})
+
+
+async def save_profile(request: web.Request) -> web.Response:
+    user = await _onboarded_user(request)
     try:
         payload = await request.json()
     except (json.JSONDecodeError, web.HTTPException):
@@ -373,19 +416,12 @@ async def save_profile(request: web.Request) -> web.Response:
             raise web.HTTPBadRequest(text=f"{field} must use YYYY-MM-DD format")
         profile[field] = value
 
-    await asyncio.to_thread(
-        database.add_user,
-        user["id"],
-        user.get("username", ""),
-        user.get("first_name", ""),
-        user.get("last_name", ""),
-    )
     await asyncio.to_thread(database.save_driver_profile, user["id"], profile)
     return web.json_response({"saved": True})
 
 
 async def submit_coefficient(request: web.Request) -> web.Response:
-    user = _authenticated_user(request)
+    user = await _onboarded_user(request)
     try:
         payload = await request.json()
     except (json.JSONDecodeError, web.HTTPException):
@@ -403,12 +439,6 @@ async def submit_coefficient(request: web.Request) -> web.Response:
     if weather not in WEATHER_OPTIONS:
         raise web.HTTPBadRequest(text="Choose a supported weather option")
 
-    database.add_user(
-        user["id"],
-        user.get("username", ""),
-        user.get("first_name", ""),
-        user.get("last_name", ""),
-    )
     saved = database.add_coefficient(
         user_id=user["id"],
         username=user.get("username", ""),
@@ -430,6 +460,7 @@ def create_app() -> web.Application:
     app.router.add_get("/api/map-config", map_config)
     app.router.add_get("/api/dashboard", dashboard)
     app.router.add_get("/api/profile", get_profile)
+    app.router.add_post("/api/onboarding", complete_onboarding)
     app.router.add_put("/api/profile", save_profile)
     app.router.add_post("/api/coefficients", submit_coefficient)
     app.router.add_post("/api/shifts", submit_shift)

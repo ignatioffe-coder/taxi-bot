@@ -17,6 +17,8 @@
   let coefficientMap = null;
   let coefficientMapHasInitialBounds = false;
   let coefficientAreas = null;
+  let coefficientMapDataSignature = null;
+  let preferredName = "";
 
   if (tg) {
     tg.ready();
@@ -64,6 +66,8 @@
       const error = new Error(
         response.status === 400
           ? "Проверь данные и обязательные поля."
+          : response.status === 403
+            ? "Сначала заполни профиль: укажи имя и вид работы."
           : "Сервис временно недоступен. Попробуй ещё раз.",
       );
       error.status = response.status;
@@ -124,7 +128,7 @@
     });
     if (view === "districts") {
       window.requestAnimationFrame(() => {
-        renderCoefficientMap(districtGroups);
+        renderCoefficientMap(districtGroups, true);
         window.setTimeout(fitCoefficientMapToViewport, 250);
       });
     }
@@ -308,7 +312,7 @@
     return yandexMapsPromise;
   }
 
-  function renderCoefficientMap(groups) {
+  function renderCoefficientMap(groups, force = false) {
     const badge = $("map-report-count");
     if (yandexMapsApiKey === null) return;
     if (!yandexMapsApiKey) {
@@ -323,6 +327,12 @@
 
     const districts = groups.flatMap((group) => group.districts);
     const reportingDistricts = districts.filter((district) => district.records > 0).length;
+    const dataSignature = JSON.stringify(districts.map((district) => [
+      district.name,
+      district.records,
+      district.avg_coefficient,
+      district.last_update,
+    ]));
     badge.textContent = "Загружаем карту…";
     $("map-message").textContent = "";
 
@@ -339,6 +349,11 @@
         });
         coefficientAreas = new ymaps.GeoObjectCollection();
         coefficientMap.geoObjects.add(coefficientAreas);
+      }
+      if (!force && dataSignature === coefficientMapDataSignature) {
+        badge.textContent = `${reportingDistricts} из ${districts.length} с данными`;
+        window.requestAnimationFrame(fitCoefficientMapToViewport);
+        return;
       }
       coefficientAreas.removeAll();
       const bounds = [[], []];
@@ -389,6 +404,7 @@
         coefficientMap.setBounds(bounds, { checkZoomRange: true, zoomMargin: 20 });
         coefficientMapHasInitialBounds = true;
       }
+      coefficientMapDataSignature = dataSignature;
       badge.textContent = `${reportingDistricts} из ${districts.length} с данными`;
       const message = $("map-message");
       message.classList.remove("map-error");
@@ -646,7 +662,10 @@
     form.elements.reminders_enabled.checked = profile.reminders_enabled;
     workType = profile.work_type;
     updateWorkTypeButtons();
-    const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(" ") || "Водитель";
+    preferredName = profile.preferred_name || "";
+    const fullName = preferredName
+      || [profile.first_name, profile.last_name].filter(Boolean).join(" ")
+      || "Водитель";
     $("profile-name").textContent = fullName;
     $("profile-avatar").textContent = Array.from(fullName.trim())[0] || "В";
     renderDocumentStatuses(profile);
@@ -656,7 +675,7 @@
   async function loadDashboard() {
     const query = new URLSearchParams({ work_type: workType, period });
     const data = await (await api(`/api/dashboard?${query}`)).json();
-    const name = data.user.first_name || "водитель";
+    const name = preferredName || data.user.first_name || "водитель";
     $("driver-name").textContent = name;
     $("avatar").textContent = Array.from(name.trim())[0] || "В";
 
@@ -751,6 +770,38 @@
     }
   });
 
+  $("onboarding-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = $("complete-onboarding");
+    const message = $("onboarding-message");
+    button.disabled = true;
+    message.textContent = "";
+    try {
+      await api("/api/onboarding", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: $("onboarding-name").value.trim(),
+          work_type: form.elements.work_type.value,
+        }),
+      });
+      const profile = await loadProfile();
+      if (!profile.onboarding_complete) {
+        throw new Error("Не удалось сохранить профиль. Попробуй ещё раз.");
+      }
+      await loadDashboard();
+      $("onboarding-screen").hidden = true;
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+      loadMapResources().catch(showError);
+    } catch (error) {
+      message.textContent = error.message || "Не удалось сохранить профиль. Попробуй ещё раз.";
+      showError(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
   $("coefficient-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = event.currentTarget.querySelector("button[type=submit]");
@@ -820,8 +871,28 @@
     weekday: "long", day: "numeric", month: "long",
   }).format(now).toLocaleUpperCase("ru");
   if (hasTelegramAuth) {
-    loadProfile().then(loadDashboard).catch(showError);
-    loadMapResources().catch(showError);
+    const onboardingScreen = $("onboarding-screen");
+    const onboardingForm = $("onboarding-form");
+    onboardingScreen.hidden = false;
+    onboardingForm.hidden = true;
+    $("onboarding-message").textContent = "Проверяем профиль…";
+    (async () => {
+      try {
+        const profile = await loadProfile();
+        if (!profile.onboarding_complete) {
+          onboardingForm.hidden = false;
+          $("onboarding-message").textContent = "";
+          $("onboarding-name").focus();
+          return;
+        }
+        await loadDashboard();
+        onboardingScreen.hidden = true;
+        loadMapResources().catch(showError);
+      } catch (error) {
+        $("onboarding-message").textContent = "Не удалось проверить профиль. Обнови приложение.";
+        showError(error);
+      }
+    })();
   } else {
     const notice = '<p class="empty-note">Telegram не передал данные авторизации. Отправь боту /start и открой Mini App кнопкой под новым сообщением.</p>';
     $("recommendations").innerHTML = notice;
@@ -837,6 +908,14 @@
   };
   window.setInterval(refreshVisibleMarketStats, 60_000);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) refreshVisibleMarketStats();
+    if (!document.hidden) {
+      refreshVisibleMarketStats();
+      if (document.querySelector("#view-districts").classList.contains("active")) {
+        window.setTimeout(() => {
+          renderCoefficientMap(districtGroups, true);
+          fitCoefficientMapToViewport();
+        }, 250);
+      }
+    }
   });
 })();
