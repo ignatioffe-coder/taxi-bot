@@ -22,6 +22,7 @@ import database
 import demand_forecasting
 import heatmap
 import subscriptions
+import weather
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -31,6 +32,17 @@ WORK_TYPES = {"taxi", "courier"}
 VEHICLE_TYPES = {"", "car", "motorcycle", "bicycle", "scooter", "foot", "other"}
 FUEL_TYPES = {"", "petrol", "diesel", "electric", "hybrid", "other"}
 PERIODS = {"day", "week", "month"}
+REPORT_CATEGORIES = {
+    "taxi": {
+        "high_demand", "low_demand", "airport_queue", "few_cars",
+        "traffic", "accident", "road_closure",
+    },
+    "courier": {
+        "high_demand", "low_activity", "many_orders", "long_wait",
+        "restaurant_busy", "order_problem", "delivery_problem",
+        "traffic", "accident", "road_closure",
+    },
+}
 AMOUNT_FIELDS = {
     "gross_income",
     "tips",
@@ -38,6 +50,12 @@ AMOUNT_FIELDS = {
     "commission_cost",
     "maintenance_cost",
     "other_cost",
+    "rental_cost",
+    "insurance_cost",
+    "tax_cost",
+    "depreciation_cost",
+    "charging_cost",
+    "connectivity_cost",
 }
 MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60
 
@@ -99,6 +117,13 @@ async def _onboarded_user(request: web.Request) -> dict:
     return user
 
 
+def _admin_user(request: web.Request) -> dict:
+    user = _authenticated_user(request)
+    if user["id"] not in config.ADMIN_IDS:
+        raise web.HTTPForbidden(text="Administrator access is required")
+    return user
+
+
 def _recommendations() -> list[dict]:
     now = config.get_moscow_time()
     month_ago = config.moscow_time_str(timedelta(days=-30))
@@ -142,7 +167,11 @@ async def index(_request: web.Request) -> web.FileResponse:
     response = web.FileResponse(STATIC_DIR / "index.html")
     response.headers["Cache-Control"] = "no-store"
     return response
-def _build_district_groups(market_stats: dict) -> list[dict]:
+def _build_district_groups(
+    market_stats: dict,
+    report_stats: dict | None = None,
+) -> list[dict]:
+    report_stats = report_stats or {}
     return [
         {
             "name": okrug,
@@ -154,6 +183,12 @@ def _build_district_groups(market_stats: dict) -> list[dict]:
                         "records": 0,
                         "last_update": None,
                     }),
+                    **report_stats.get(district, {
+                        "report_count": 0,
+                        "reporters": 0,
+                        "last_report_update": None,
+                        "report_categories": [],
+                    }),
                 }
                 for district in districts
             ],
@@ -164,9 +199,16 @@ def _build_district_groups(market_stats: dict) -> list[dict]:
 
 async def district_catalog(_request: web.Request) -> web.Response:
     await _onboarded_user(_request)
+    work_type = _request.query.get("work_type", "taxi")
+    if work_type not in WORK_TYPES:
+        raise web.HTTPBadRequest(text="Choose taxi or courier")
     market_stats = await asyncio.to_thread(database.get_market_district_stats)
+    report_stats = await asyncio.to_thread(
+        database.get_driver_report_district_stats,
+        work_type,
+    )
     return web.json_response(
-        {"district_groups": _build_district_groups(market_stats)},
+        {"district_groups": _build_district_groups(market_stats, report_stats)},
         headers={"Cache-Control": "no-store"},
     )
 
@@ -187,6 +229,15 @@ def _period_start(period: str) -> datetime:
     else:
         date = now.date().replace(day=1)
     return datetime.combine(date, datetime_time.min)
+
+
+async def city_weather(request: web.Request) -> web.Response:
+    await _onboarded_user(request)
+    conditions = await asyncio.to_thread(weather.get_weather)
+    return web.json_response(
+        conditions,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def dashboard(request: web.Request) -> web.Response:
@@ -218,8 +269,19 @@ async def dashboard(request: web.Request) -> web.Response:
         work_type,
         forecast_inputs,
     )
+    await asyncio.to_thread(
+        database.record_forecast_snapshot,
+        user["id"],
+        work_type,
+        forecast,
+    )
+    await asyncio.to_thread(database.evaluate_forecast_snapshots)
     coefficient_stats = database.get_user_stats(user["id"])
-    profile = await asyncio.to_thread(database.get_driver_profile, user["id"])
+    profile = await asyncio.to_thread(
+        database.get_driver_profile,
+        user["id"],
+        work_type,
+    )
     weekly_summary = summary
     if period != "week":
         weekly_summary = await asyncio.to_thread(
@@ -228,7 +290,11 @@ async def dashboard(request: web.Request) -> web.Response:
             work_type,
             _period_start("week"),
         )
-    district_groups = _build_district_groups(market_stats)
+    report_stats = await asyncio.to_thread(
+        database.get_driver_report_district_stats,
+        work_type,
+    )
+    district_groups = _build_district_groups(market_stats, report_stats)
     return web.json_response({
         "user": {
             "first_name": profile.get("preferred_name") or user.get("first_name", ""),
@@ -285,6 +351,14 @@ async def submit_shift(request: web.Request) -> web.Response:
         for field in AMOUNT_FIELDS
     }
     hours_worked = _validated_amount(payload, "hours_worked", maximum=24)
+    distance_km = _validated_amount(payload, "distance_km", maximum=2000)
+    orders_count = payload.get("orders_count", 0)
+    if (
+        isinstance(orders_count, bool)
+        or not isinstance(orders_count, int)
+        or not 0 <= orders_count <= 1000
+    ):
+        raise web.HTTPBadRequest(text="orders_count must be an integer from 0 to 1000")
 
     shift_id = await asyncio.to_thread(
         database.add_work_shift,
@@ -298,11 +372,24 @@ async def submit_shift(request: web.Request) -> web.Response:
         amounts["maintenance_cost"],
         amounts["other_cost"],
         hours_worked,
+        rental_cost=amounts["rental_cost"],
+        insurance_cost=amounts["insurance_cost"],
+        tax_cost=amounts["tax_cost"],
+        depreciation_cost=amounts["depreciation_cost"],
+        charging_cost=amounts["charging_cost"],
+        connectivity_cost=amounts["connectivity_cost"],
+        distance_km=distance_km,
+        orders_count=orders_count,
     )
     return web.json_response({"saved": True, "shift_id": shift_id})
 
 
-def _profile_response(profile: dict, subscription_access: dict | None = None) -> dict:
+def _profile_response(
+    profile: dict,
+    subscription_access: dict | None = None,
+    directions: list[str] | None = None,
+    notifications: dict | None = None,
+) -> dict:
     fields = (
         "work_type", "vehicle_type", "vehicle_make", "vehicle_model",
         "vehicle_year", "fuel_type", "weekly_income_goal", "reminders_enabled",
@@ -325,6 +412,8 @@ def _profile_response(profile: dict, subscription_access: dict | None = None) ->
         "preferred_name": profile.get("preferred_name") or "",
         "onboarding_complete": bool(profile.get("onboarding_complete")),
         "subscription": subscription_access,
+        "directions": directions or [],
+        "notifications": notifications or {},
     })
     return result
 
@@ -338,7 +427,17 @@ async def get_profile(request: web.Request) -> web.Response:
         user.get("first_name", ""),
         user.get("last_name", ""),
     )
-    profile = await asyncio.to_thread(database.get_driver_profile, user["id"])
+    work_type = request.query.get("work_type")
+    if work_type is not None and work_type not in WORK_TYPES:
+        raise web.HTTPBadRequest(text="Choose taxi or courier")
+    directions = await asyncio.to_thread(database.get_driver_directions, user["id"])
+    if work_type is not None and work_type not in directions:
+        raise web.HTTPNotFound(text="This work direction is not set up")
+    profile = await asyncio.to_thread(
+        database.get_driver_profile,
+        user["id"],
+        work_type,
+    )
     subscription_access = None
     if profile.get("onboarding_complete") and profile.get("preferred_name"):
         subscription_access = await asyncio.to_thread(
@@ -348,7 +447,74 @@ async def get_profile(request: web.Request) -> web.Response:
             "price_stars": subscriptions.MONTHLY_PRICE_STARS,
             "period_days": subscriptions.SUBSCRIPTION_PERIOD_SECONDS // (24 * 60 * 60),
         })
-    return web.json_response(_profile_response(profile, subscription_access))
+    notifications = (
+        await asyncio.to_thread(database.get_notification_preferences, user["id"])
+        if profile.get("onboarding_complete") else {}
+    )
+    return web.json_response(
+        _profile_response(profile, subscription_access, directions, notifications)
+    )
+
+
+async def add_profile_direction(request: web.Request) -> web.Response:
+    user = await _onboarded_user(request)
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, web.HTTPException):
+        raise web.HTTPBadRequest(text="Request body must be valid JSON")
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"work_type"}
+        or not isinstance(payload["work_type"], str)
+        or payload["work_type"] not in WORK_TYPES
+    ):
+        raise web.HTTPBadRequest(text="Choose taxi or courier")
+    added = await asyncio.to_thread(
+        database.add_driver_direction,
+        user["id"],
+        payload["work_type"],
+    )
+    directions = await asyncio.to_thread(database.get_driver_directions, user["id"])
+    return web.json_response({"added": added, "directions": directions})
+
+
+async def save_notification_preferences(request: web.Request) -> web.Response:
+    user = await _onboarded_user(request)
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, web.HTTPException):
+        raise web.HTTPBadRequest(text="Request body must be valid JSON")
+    required = {
+        *database.NOTIFICATION_BOOLEAN_FIELDS,
+        "frequency", "quiet_start", "quiet_end",
+    }
+    if not isinstance(payload, dict) or set(payload) != required:
+        raise web.HTTPBadRequest(text="Notification preferences are incomplete")
+    for field in database.NOTIFICATION_BOOLEAN_FIELDS:
+        if not isinstance(payload[field], bool):
+            raise web.HTTPBadRequest(text=f"{field} must be true or false")
+    if (
+        not isinstance(payload["frequency"], str)
+        or payload["frequency"] not in {"immediate", "hourly", "daily"}
+    ):
+        raise web.HTTPBadRequest(text="Choose a supported notification frequency")
+    for field in ("quiet_start", "quiet_end"):
+        value = payload[field]
+        if not isinstance(value, str) or len(value) not in {0, 5}:
+            raise web.HTTPBadRequest(text=f"{field} must use HH:MM format")
+        if value:
+            try:
+                parsed_time = datetime.strptime(value, "%H:%M")
+            except ValueError:
+                raise web.HTTPBadRequest(text=f"{field} must use HH:MM format")
+            if parsed_time.strftime("%H:%M") != value:
+                raise web.HTTPBadRequest(text=f"{field} must use HH:MM format")
+    await asyncio.to_thread(
+        database.save_notification_preferences,
+        user["id"],
+        payload,
+    )
+    return web.json_response({"saved": True})
 
 
 async def complete_onboarding(request: web.Request) -> web.Response:
@@ -457,6 +623,9 @@ async def save_profile(request: web.Request) -> web.Response:
         or payload["work_type"] not in WORK_TYPES
     ):
         raise web.HTTPBadRequest(text="Choose taxi or courier")
+    directions = await asyncio.to_thread(database.get_driver_directions, user["id"])
+    if payload["work_type"] not in directions:
+        raise web.HTTPBadRequest(text="Add this work direction before saving it")
     if (
         not isinstance(payload["vehicle_type"], str)
         or payload["vehicle_type"] not in VEHICLE_TYPES
@@ -548,6 +717,134 @@ async def submit_coefficient(request: web.Request) -> web.Response:
     return web.json_response({"saved": True})
 
 
+async def submit_driver_report(request: web.Request) -> web.Response:
+    user = await _onboarded_user(request)
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, web.HTTPException):
+        raise web.HTTPBadRequest(text="Request body must be valid JSON")
+    if not isinstance(payload, dict) or set(payload) != {
+        "work_type", "category", "district", "details",
+    }:
+        raise web.HTTPBadRequest(text="Report fields are incomplete or unsupported")
+
+    work_type = payload["work_type"]
+    category = payload["category"]
+    district = payload["district"]
+    details = payload["details"]
+    if not isinstance(work_type, str) or work_type not in WORK_TYPES:
+        raise web.HTTPBadRequest(text="Choose taxi or courier")
+    if (
+        not isinstance(category, str)
+        or category not in REPORT_CATEGORIES[work_type]
+    ):
+        raise web.HTTPBadRequest(text="Choose a supported report category")
+    if not isinstance(district, str) or district not in config.MOSCOW_DISTRICTS:
+        raise web.HTTPBadRequest(text="Choose a district from the list")
+    if not isinstance(details, str) or len(details.strip()) > 280:
+        raise web.HTTPBadRequest(text="Details must be up to 280 characters")
+
+    result = await asyncio.to_thread(
+        database.add_driver_report,
+        user["id"],
+        work_type,
+        category,
+        district,
+        details.strip(),
+    )
+    if not result["created"]:
+        if result["reason"] == "duplicate":
+            raise web.HTTPConflict(text="You recently sent the same report")
+        raise web.HTTPTooManyRequests(text="Report limit reached; try again later")
+    return web.json_response({"saved": True, "report_id": result["report_id"]})
+
+
+async def get_driver_reports(request: web.Request) -> web.Response:
+    await _onboarded_user(request)
+    work_type = request.query.get("work_type", "taxi")
+    if work_type not in WORK_TYPES:
+        raise web.HTTPBadRequest(text="Choose taxi or courier")
+    reports = await asyncio.to_thread(
+        database.get_active_driver_reports,
+        work_type,
+    )
+    return web.json_response(
+        {"reports": reports},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def admin_summary(request: web.Request) -> web.Response:
+    _admin_user(request)
+    summary = await asyncio.to_thread(database.get_admin_summary)
+    return web.json_response(summary, headers={"Cache-Control": "no-store"})
+
+
+async def admin_reports(request: web.Request) -> web.Response:
+    _admin_user(request)
+    reports = await asyncio.to_thread(database.get_driver_reports_for_admin)
+    return web.json_response(
+        {"reports": reports},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def moderate_driver_report(request: web.Request) -> web.Response:
+    _admin_user(request)
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, web.HTTPException):
+        raise web.HTTPBadRequest(text="Request body must be valid JSON")
+    if not isinstance(payload, dict) or set(payload) != {"status"}:
+        raise web.HTTPBadRequest(text="A report status is required")
+    status = payload["status"]
+    if not isinstance(status, str) or status not in {"active", "hidden"}:
+        raise web.HTTPBadRequest(text="Choose active or hidden status")
+    try:
+        report_id = int(request.match_info["report_id"])
+    except (KeyError, ValueError):
+        raise web.HTTPBadRequest(text="Report ID must be an integer")
+    updated = await asyncio.to_thread(
+        database.set_driver_report_status,
+        report_id,
+        status,
+    )
+    if not updated:
+        raise web.HTTPNotFound(text="Report not found")
+    return web.json_response({"updated": True})
+
+
+async def export_personal_data(request: web.Request) -> web.Response:
+    user = _authenticated_user(request)
+    data = await asyncio.to_thread(database.export_user_data, user["id"])
+    return web.json_response(
+        data,
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": 'attachment; filename="moventa-data-export.json"',
+        },
+    )
+
+
+async def delete_personal_data(request: web.Request) -> web.Response:
+    user = _authenticated_user(request)
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, web.HTTPException):
+        raise web.HTTPBadRequest(text="Request body must be valid JSON")
+    if not isinstance(payload, dict) or set(payload) != {"confirm"} or payload["confirm"] is not True:
+        raise web.HTTPBadRequest(text="Explicit confirmation is required")
+    if await asyncio.to_thread(
+        database.has_active_paid_subscription,
+        user["id"],
+    ):
+        raise web.HTTPConflict(
+            text="Cancel the active Telegram subscription before deleting the account"
+        )
+    await asyncio.to_thread(database.delete_user_data, user["id"])
+    return web.json_response({"deleted": True})
+
+
 def create_app(payment_bot: Bot | None = None) -> web.Application:
     app = web.Application()
     app[PAYMENT_BOT_KEY] = payment_bot
@@ -555,11 +852,27 @@ def create_app(payment_bot: Bot | None = None) -> web.Application:
     app.router.add_static("/static/", path=STATIC_DIR)
     app.router.add_get("/api/districts", district_catalog)
     app.router.add_get("/api/map-config", map_config)
+    app.router.add_get("/api/weather", city_weather)
     app.router.add_get("/api/dashboard", dashboard)
     app.router.add_get("/api/profile", get_profile)
     app.router.add_post("/api/subscription/invoice", create_subscription_invoice)
     app.router.add_post("/api/onboarding", complete_onboarding)
     app.router.add_put("/api/profile", save_profile)
+    app.router.add_post("/api/profile/directions", add_profile_direction)
+    app.router.add_put(
+        "/api/notifications/preferences",
+        save_notification_preferences,
+    )
     app.router.add_post("/api/coefficients", submit_coefficient)
     app.router.add_post("/api/shifts", submit_shift)
+    app.router.add_get("/api/reports", get_driver_reports)
+    app.router.add_post("/api/reports", submit_driver_report)
+    app.router.add_get("/api/admin/summary", admin_summary)
+    app.router.add_get("/api/admin/reports", admin_reports)
+    app.router.add_patch(
+        "/api/admin/reports/{report_id:\\d+}",
+        moderate_driver_report,
+    )
+    app.router.add_get("/api/privacy/export", export_personal_data)
+    app.router.add_post("/api/privacy/delete", delete_personal_data)
     return app

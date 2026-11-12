@@ -8,6 +8,7 @@ import time
 import unittest
 from contextlib import closing
 from datetime import timedelta
+from unittest.mock import patch
 from urllib.parse import urlencode
 
 os.environ.setdefault("BOT_TOKEN", "test-bot-token")
@@ -170,6 +171,198 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(courier_forecast["items"]), 1)
         self.assertEqual(courier_forecast["items"][0]["district"], district)
         self.assertEqual(courier_forecast["items"][0]["net_income_per_hour"], 90)
+
+    async def test_driver_reports_expire_and_are_rate_limited(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        district = config.MOSCOW_DISTRICTS[0]
+        payload = {
+            "work_type": "taxi",
+            "category": "high_demand",
+            "district": district,
+            "details": "Много заказов",
+        }
+
+        response = await self.client.post(
+            "/api/reports",
+            headers=headers,
+            json=payload,
+        )
+        self.assertEqual(response.status, 200)
+        report_id = (await response.json())["report_id"]
+        response = await self.client.get(
+            "/api/reports?work_type=taxi",
+            headers=headers,
+        )
+        reports = (await response.json())["reports"]
+        self.assertEqual(reports[0]["id"], report_id)
+        self.assertEqual(reports[0]["confidence"], "single")
+        self.assertNotIn("user_id", reports[0])
+
+        catalog_response = await self.client.get(
+            "/api/districts?work_type=taxi",
+            headers=headers,
+        )
+        self.assertEqual(catalog_response.status, 200)
+        catalog = await catalog_response.json()
+        districts = [
+            item
+            for group in catalog["district_groups"]
+            for item in group["districts"]
+        ]
+        reported_district = next(
+            item for item in districts if item["name"] == district
+        )
+        self.assertEqual(reported_district["report_count"], 1)
+
+        duplicate = await self.client.post(
+            "/api/reports",
+            headers=headers,
+            json=payload,
+        )
+        self.assertEqual(duplicate.status, 409)
+
+        categories = [
+            "low_demand", "airport_queue", "few_cars", "traffic", "accident",
+        ]
+        for index, category in enumerate(categories, start=1):
+            limited = await self.client.post(
+                "/api/reports",
+                headers=headers,
+                json={
+                    **payload,
+                    "category": category,
+                    "district": config.MOSCOW_DISTRICTS[index],
+                },
+            )
+            expected_status = 429 if index == len(categories) else 200
+            self.assertEqual(limited.status, expected_status)
+
+    async def test_driver_reports_are_corroborated_and_admin_can_moderate(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        import database
+
+        district = config.MOSCOW_DISTRICTS[0]
+        first = database.add_driver_report(
+            123456, "taxi", "high_demand", district, "Большой спрос"
+        )
+        second = database.add_driver_report(
+            987654, "taxi", "high_demand", district, "Есть заказы"
+        )
+        public_reports = database.get_active_driver_reports("taxi")
+        self.assertEqual(public_reports[0]["id"], second["report_id"])
+        self.assertEqual(public_reports[0]["confidence"], "corroborated")
+        self.assertEqual(public_reports[0]["corroborating_reporters"], 2)
+
+        admin_headers = {
+            "X-Telegram-Init-Data": signed_init_data(
+                {"id": config.ADMIN_IDS[0], "first_name": "Admin"},
+                config.BOT_TOKEN,
+                int(time.time()),
+            )
+        }
+        summary_response = await self.client.get(
+            "/api/admin/summary",
+            headers=admin_headers,
+        )
+        self.assertEqual(summary_response.status, 200)
+        summary = await summary_response.json()
+        self.assertEqual(summary["active_reports"], 2)
+
+        moderation_response = await self.client.patch(
+            f"/api/admin/reports/{first['report_id']}",
+            headers=admin_headers,
+            json={"status": "hidden"},
+        )
+        self.assertEqual(moderation_response.status, 200)
+        self.assertEqual(len(database.get_active_driver_reports("taxi")), 1)
+
+    async def test_forecast_runs_are_deduplicated_and_evaluated_against_observations(self):
+        import database
+
+        district = config.MOSCOW_DISTRICTS[0]
+        generated_at = database.get_moscow_time().replace(
+            year=2026, month=1, day=1, hour=10, minute=0, second=0, microsecond=0
+        )
+        taxi_forecast = {
+            "items": [{
+                "district": district,
+                "score": 70,
+                "confidence": 60,
+                "current_coefficient": 2.0,
+            }]
+        }
+        taxi_run = database.record_forecast_snapshot(
+            123456, "taxi", taxi_forecast, generated_at
+        )
+        duplicate_run = database.record_forecast_snapshot(
+            123456,
+            "taxi",
+            taxi_forecast,
+            generated_at + timedelta(minutes=5),
+        )
+        self.assertEqual(duplicate_run, taxi_run)
+
+        courier_run = database.record_forecast_snapshot(
+            123456,
+            "courier",
+            {
+                "items": [{
+                    "district": district,
+                    "score": 80,
+                    "confidence": 70,
+                    "net_income_per_hour": 100,
+                }]
+            },
+            generated_at,
+        )
+        self.assertNotEqual(courier_run, taxi_run)
+        with closing(sqlite3.connect(config.DB_PATH)) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO coefficients (
+                        user_id, district, coefficient, timestamp
+                    )
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        123456,
+                        district,
+                        3.0,
+                        (generated_at + timedelta(minutes=65)).strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        ),
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO work_shifts (
+                        user_id, work_type, district, gross_income, hours_worked,
+                        timestamp
+                    )
+                    VALUES (?, 'courier', ?, ?, ?, ?)
+                    """,
+                    (
+                        123456,
+                        district,
+                        800,
+                        10,
+                        (generated_at + timedelta(days=2)).strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        ),
+                    ),
+                )
+
+        database.evaluate_forecast_snapshots(
+            generated_at + timedelta(days=8, hours=1)
+        )
+        quality = database.get_forecast_quality_summary()
+        self.assertEqual(quality["taxi"]["evaluated"], 1)
+        self.assertEqual(quality["taxi"]["mean_absolute_error"], 1)
+        self.assertEqual(quality["courier"]["evaluated"], 1)
+        self.assertEqual(quality["courier"]["mean_absolute_error"], 20)
 
     async def test_district_catalog_requires_an_active_trial_or_subscription(self):
         response = await self.client.get("/api/districts")
@@ -432,6 +625,192 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(database.log_document_reminder(reminder))
         self.assertEqual(database.get_due_document_reminders(today), [])
 
+    async def test_profile_can_store_both_work_directions_independently(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers, work_type="taxi")
+
+        profile_response = await self.client.get("/api/profile", headers=headers)
+        profile = await profile_response.json()
+        self.assertEqual(profile["directions"], ["taxi"])
+
+        missing_direction = await self.client.get(
+            "/api/profile?work_type=courier",
+            headers=headers,
+        )
+        self.assertEqual(missing_direction.status, 404)
+
+        added = await self.client.post(
+            "/api/profile/directions",
+            headers=headers,
+            json={"work_type": "courier"},
+        )
+        self.assertEqual(added.status, 200)
+        self.assertEqual((await added.json())["directions"], ["taxi", "courier"])
+
+        courier_profile = {
+            "work_type": "courier",
+            "vehicle_type": "bicycle",
+            "vehicle_make": "Test",
+            "vehicle_model": "Bike",
+            "vehicle_year": None,
+            "fuel_type": "",
+            "weekly_income_goal": 25000,
+            "reminders_enabled": True,
+            "medical_book_expiry": "",
+            "license_expiry": "",
+            "osago_expiry": "",
+            "inspection_expiry": "",
+            "taxi_permit_expiry": "",
+        }
+        saved = await self.client.put(
+            "/api/profile",
+            headers=headers,
+            json=courier_profile,
+        )
+        self.assertEqual(saved.status, 200)
+
+        taxi = await (
+            await self.client.get(
+                "/api/profile?work_type=taxi",
+                headers=headers,
+            )
+        ).json()
+        courier = await (
+            await self.client.get(
+                "/api/profile?work_type=courier",
+                headers=headers,
+            )
+        ).json()
+        self.assertEqual(taxi["vehicle_type"], "")
+        self.assertEqual(courier["vehicle_type"], "bicycle")
+        self.assertEqual(courier["weekly_income_goal"], 25000)
+
+    async def test_notification_preferences_validate_and_disable_document_reminders(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        profile = await (
+            await self.client.get("/api/profile", headers=headers)
+        ).json()
+        self.assertTrue(profile["notifications"]["financial_reminders"])
+        import database
+
+        profile_data = database.get_driver_profile(123456)
+        profile_data["medical_book_expiry"] = (
+            database.get_moscow_time().date() + timedelta(days=7)
+        ).isoformat()
+        database.save_driver_profile(123456, profile_data)
+        self.assertEqual(len(database.get_due_document_reminders(
+            database.get_moscow_time().date()
+        )), 1)
+
+        payload = {
+            "demand_changes": True,
+            "promising_areas": False,
+            "weather_changes": True,
+            "city_events": False,
+            "traffic_events": True,
+            "personal_recommendations": True,
+            "financial_reminders": False,
+            "frequency": "hourly",
+            "quiet_start": "22:00",
+            "quiet_end": "07:00",
+        }
+        response = await self.client.put(
+            "/api/notifications/preferences",
+            headers=headers,
+            json=payload,
+        )
+        self.assertEqual(response.status, 200)
+        saved = await (
+            await self.client.get("/api/profile", headers=headers)
+        ).json()
+        self.assertFalse(saved["notifications"]["financial_reminders"])
+        self.assertEqual(saved["notifications"]["frequency"], "hourly")
+        self.assertEqual(
+            database.get_due_document_reminders(database.get_moscow_time().date()),
+            [],
+        )
+
+        invalid = await self.client.put(
+            "/api/notifications/preferences",
+            headers=headers,
+            json={**payload, "quiet_start": "24:00"},
+        )
+        self.assertEqual(invalid.status, 400)
+        invalid_boolean = await self.client.put(
+            "/api/notifications/preferences",
+            headers=headers,
+            json={**payload, "financial_reminders": "no"},
+        )
+        self.assertEqual(invalid_boolean.status, 400)
+
+    async def test_weather_endpoint_marks_real_source_status(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        with patch(
+            "mini_app.weather.get_weather",
+            return_value={
+                "text": "☀️ Ясно, +20°C",
+                "condition": "☀️ Ясно",
+                "temp": "+20°C",
+                "source": "wttr.in",
+                "ok": True,
+            },
+        ):
+            response = await self.client.get("/api/weather", headers=headers)
+        self.assertEqual(response.status, 200)
+        weather_data = await response.json()
+        self.assertTrue(weather_data["ok"])
+        self.assertEqual(weather_data["source"], "wttr.in")
+
+    async def test_legacy_single_direction_profile_is_migrated(self):
+        import database
+
+        database.add_user(123456, "driver", "Driver", "")
+        with closing(sqlite3.connect(config.DB_PATH)) as conn:
+            with conn:
+                conn.execute("DROP TABLE driver_profiles")
+                conn.execute("""
+                    CREATE TABLE driver_profiles (
+                        user_id INTEGER PRIMARY KEY,
+                        work_type TEXT NOT NULL DEFAULT 'taxi',
+                        vehicle_type TEXT NOT NULL DEFAULT '',
+                        vehicle_make TEXT NOT NULL DEFAULT '',
+                        vehicle_model TEXT NOT NULL DEFAULT '',
+                        vehicle_year INTEGER,
+                        fuel_type TEXT NOT NULL DEFAULT '',
+                        weekly_income_goal REAL NOT NULL DEFAULT 0,
+                        reminders_enabled INTEGER NOT NULL DEFAULT 1,
+                        medical_book_expiry TEXT,
+                        license_expiry TEXT,
+                        osago_expiry TEXT,
+                        inspection_expiry TEXT,
+                        taxi_permit_expiry TEXT,
+                        updated_at DATETIME NOT NULL
+                    )
+                """)
+                conn.execute(
+                    """
+                    INSERT INTO driver_profiles (
+                        user_id, work_type, vehicle_type, vehicle_make, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        123456,
+                        "courier",
+                        "bicycle",
+                        "Example",
+                        "2024-01-01 12:00:00",
+                    ),
+                )
+
+        database.init_db()
+        self.assertEqual(database.get_driver_directions(123456), ["courier"])
+        profile = database.get_driver_profile(123456, "courier")
+        self.assertEqual(profile["vehicle_type"], "bicycle")
+        self.assertEqual(profile["vehicle_make"], "Example")
+
     async def test_profile_rejects_invalid_document_dates_and_flags(self):
         headers = {"X-Telegram-Init-Data": self.init_data}
         await self.complete_onboarding(headers)
@@ -551,6 +930,110 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(response.status, 400)
+
+    async def test_financial_summary_separates_cash_and_economic_profit(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        response = await self.client.post(
+            "/api/shifts",
+            headers=headers,
+            json={
+                "work_type": "taxi",
+                "gross_income": 10000,
+                "tips": 0,
+                "fuel_cost": 1000,
+                "rental_cost": 500,
+                "charging_cost": 100,
+                "connectivity_cost": 50,
+                "depreciation_cost": 200,
+                "hours_worked": 10,
+                "distance_km": 100,
+                "orders_count": 5,
+            },
+        )
+        self.assertEqual(response.status, 200)
+
+        dashboard_response = await self.client.get(
+            "/api/dashboard?work_type=taxi&period=week",
+            headers=headers,
+        )
+        summary = (await dashboard_response.json())["summary"]
+        self.assertEqual(summary["total_expenses"], 1650)
+        self.assertEqual(summary["economic_expenses"], 1850)
+        self.assertEqual(summary["net_income"], 8350)
+        self.assertEqual(summary["economic_profit"], 8150)
+        self.assertEqual(summary["expenses_per_km"], 16.5)
+        self.assertEqual(summary["average_check"], 2000)
+        self.assertEqual(summary["average_order_duration_minutes"], 120)
+
+    async def test_personal_data_export_and_deletion_are_user_scoped(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        import database
+
+        await self.client.post(
+            "/api/shifts",
+            headers=headers,
+            json={
+                "work_type": "taxi",
+                "gross_income": 5000,
+                "hours_worked": 5,
+            },
+        )
+        database.add_user(987654, "other", "Other", "")
+        database.add_work_shift(
+            987654, "taxi", None, 1000, 0, 0, 0, 0, 0, 1
+        )
+
+        export_response = await self.client.get(
+            "/api/privacy/export",
+            headers=headers,
+        )
+        self.assertEqual(export_response.status, 200)
+        exported = await export_response.json()
+        self.assertEqual(exported["user"]["user_id"], 123456)
+        self.assertEqual(len(exported["shifts"]), 1)
+
+        with closing(sqlite3.connect(config.DB_PATH)) as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE user_subscriptions SET paid_until = ? WHERE user_id = ?",
+                    (int(time.time()) + 3600, 123456),
+                )
+        blocked = await self.client.post(
+            "/api/privacy/delete",
+            headers=headers,
+            json={"confirm": True},
+        )
+        self.assertEqual(blocked.status, 409)
+        self.assertTrue(database.is_user_onboarded(123456))
+
+        with closing(sqlite3.connect(config.DB_PATH)) as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE user_subscriptions SET paid_until = 0 WHERE user_id = ?",
+                    (123456,),
+                )
+        deleted = await self.client.post(
+            "/api/privacy/delete",
+            headers=headers,
+            json={"confirm": True},
+        )
+        self.assertEqual(deleted.status, 200)
+        self.assertFalse(database.is_user_onboarded(123456))
+        self.assertEqual(database.get_work_summary(
+            123456,
+            "taxi",
+            database.get_moscow_time() - timedelta(days=30),
+        )["shifts"], 0)
+        self.assertEqual(
+            database.get_work_summary(
+                987654,
+                "taxi",
+                database.get_moscow_time() - timedelta(days=30),
+            )["shifts"],
+            1,
+        )
 
     async def test_onboarding_saves_name_and_work_type_only_once(self):
         headers = {"X-Telegram-Init-Data": self.init_data}

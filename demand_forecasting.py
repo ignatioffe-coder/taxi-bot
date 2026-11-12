@@ -181,6 +181,11 @@ def _courier_forecast(inputs: dict, now: datetime) -> dict:
                 - float(shift.get("commission_cost") or 0)
                 - float(shift.get("maintenance_cost") or 0)
                 - float(shift.get("other_cost") or 0)
+                - float(shift.get("rental_cost") or 0)
+                - float(shift.get("insurance_cost") or 0)
+                - float(shift.get("tax_cost") or 0)
+                - float(shift.get("charging_cost") or 0)
+                - float(shift.get("connectivity_cost") or 0)
             )
         except (TypeError, ValueError):
             continue
