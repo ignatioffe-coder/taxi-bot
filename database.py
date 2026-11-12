@@ -47,10 +47,23 @@ def init_db():
             username TEXT,
             first_name TEXT,
             last_name TEXT,
+            preferred_name TEXT NOT NULL DEFAULT '',
+            onboarding_complete INTEGER NOT NULL DEFAULT 1,
             joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             is_active INTEGER DEFAULT 1
         )
     """)
+    user_columns = {
+        row[1] for row in cursor.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if "preferred_name" not in user_columns:
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN preferred_name TEXT NOT NULL DEFAULT ''"
+        )
+    if "onboarding_complete" not in user_columns:
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN onboarding_complete INTEGER NOT NULL DEFAULT 1"
+        )
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS locations (
@@ -151,8 +164,10 @@ def add_user(user_id: int, username: str, first_name: str, last_name: str):
         # ИСПРАВЛЕНО: INSERT OR REPLACE удалял строку и создавал новую,
         # из-за чего при каждом /start сбрасывались joined_at и is_active.
         cursor.execute("""
-            INSERT INTO users (user_id, username, first_name, last_name)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO users (
+                user_id, username, first_name, last_name, onboarding_complete
+            )
+            VALUES (?, ?, ?, ?, 0)
             ON CONFLICT(user_id) DO UPDATE SET
                 username = excluded.username,
                 first_name = excluded.first_name,
@@ -161,6 +176,46 @@ def add_user(user_id: int, username: str, first_name: str, last_name: str):
         conn.commit()
     finally:
         conn.close()
+
+
+def is_user_onboarded(user_id: int) -> bool:
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        row = conn.execute(
+            "SELECT onboarding_complete FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+    return bool(row and row[0])
+
+
+def complete_onboarding(user_id: int, preferred_name: str, work_type: str) -> bool:
+    if work_type not in {"taxi", "courier"}:
+        raise ValueError("Unsupported work type")
+
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        with conn:
+            updated = conn.execute(
+                """
+                UPDATE users
+                SET preferred_name = ?, onboarding_complete = 1
+                WHERE user_id = ? AND onboarding_complete = 0
+                """,
+                (preferred_name, user_id),
+            )
+            if updated.rowcount != 1:
+                return False
+
+            now = get_moscow_time().strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                """
+                INSERT INTO driver_profiles (user_id, work_type, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    work_type = excluded.work_type,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, work_type, now),
+            )
+    return True
 
 
 def get_stats_by_district(district: str, limit: int = 50) -> List[Dict]:
@@ -376,7 +431,8 @@ def get_driver_profile(user_id: int) -> Dict:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             """
-            SELECT u.first_name, u.last_name, p.*
+            SELECT u.first_name, u.last_name, u.preferred_name,
+                   u.onboarding_complete, p.*
             FROM users AS u
             LEFT JOIN driver_profiles AS p ON p.user_id = u.user_id
             WHERE u.user_id = ?
@@ -386,6 +442,7 @@ def get_driver_profile(user_id: int) -> Dict:
     if row is None:
         return {}
     profile = dict(row)
+    profile["onboarding_complete"] = bool(profile["onboarding_complete"])
     if profile["user_id"] is None:
         profile.update({
             "work_type": "taxi",

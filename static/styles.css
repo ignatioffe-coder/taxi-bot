@@ -17,6 +17,16 @@
 body { margin: 0; background: var(--bg); color: var(--text); }
 button, input, select { font: inherit; }
 button { color: inherit; }
+.onboarding-screen { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; overflow-y: auto; padding: max(24px, env(safe-area-inset-top)) 18px max(24px, env(safe-area-inset-bottom)); background: rgba(17, 21, 27, .97); }
+.onboarding-screen[hidden] { display: none; }
+.onboarding-card { width: min(100%, 430px); padding: 23px; border: 1px solid var(--line); border-radius: 21px; background: var(--surface); box-shadow: 0 20px 70px rgba(0, 0, 0, .35); }
+.onboarding-card > .brand-mark { margin-bottom: 20px; }
+.onboarding-card h1 { margin-bottom: 8px; }
+.onboarding-intro { margin-bottom: 21px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.onboarding-options { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 4px 0 0; padding: 0; border: 0; }
+.onboarding-options legend { margin-bottom: 8px; color: #b5bec8; font-size: 10px; font-weight: 650; }
+.onboarding-options label { display: flex; min-height: 48px; align-items: center; gap: 7px; margin: 0; padding: 0 10px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-raised); color: var(--text); font-size: 11px; }
+.onboarding-options input { width: 16px; height: 16px; margin: 0; accent-color: var(--amber); }
 .app-shell { width: min(100%, 620px); margin: 0 auto; padding: 22px 18px calc(38px + env(safe-area-inset-bottom)); }
 .topbar, .brand, .welcome, .section-heading, .profit-topline, .profit-meta, .form-heading, .district-row, .shift-row { display: flex; align-items: center; }
 .topbar, .welcome, .section-heading, .profit-topline, .district-row, .shift-row { justify-content: space-between; }
@@ -145,7 +155,11 @@ h3 { margin: 0; font-size: 15px; }
 .form-heading .eyebrow { margin-bottom: 4px; }
 .form-icon { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border-radius: 12px; background: rgba(255, 191, 85, .11); color: var(--amber); font-size: 16px; font-weight: 800; }
 .data-form { display: grid; gap: 9px; }
+.data-form[hidden] { display: none; }
 .data-form label { display: block; margin: 3px 0 0; color: #b5bec8; font-size: 10px; font-weight: 650; }
+.data-form .onboarding-options label { display: flex; margin: 0; color: var(--text); font-size: 11px; }
+.data-form .onboarding-options legend { grid-column: 1 / -1; }
+.data-form .onboarding-options input { width: 16px; height: 16px; padding: 0; border: 0; background: transparent; }
 .optional { color: var(--muted); font-weight: 400; }
 .data-form input, .data-form select { width: 100%; min-width: 0; height: 43px; padding: 0 11px; border: 1px solid var(--line); border-radius: 11px; outline: none; background: var(--surface-raised); color: var(--text); font-size: 11px; }
 .data-form input::placeholder { color: #65717e; }
@@ -190,7 +204,7 @@ h3 { margin: 0; font-size: 15px; }
 .data-form .reminder-toggle input { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--amber); }
 .shifts-history { margin-top: 26px; }
 .app-footer { padding: 26px 0 0; color: #68737f; text-align: center; font-size: 9px; }
-.toast { position: fixed; z-index: 9; right: 16px; bottom: calc(18px + env(safe-area-inset-bottom)); left: 16px; max-width: 580px; margin: auto; padding: 12px 14px; border: 1px solid var(--line); border-radius: 13px; background: #303943; color: var(--text); opacity: 0; pointer-events: none; transform: translateY(9px); transition: .2s ease; font-size: 11px; }
+.toast { position: fixed; z-index: 30; right: 16px; bottom: calc(18px + env(safe-area-inset-bottom)); left: 16px; max-width: 580px; margin: auto; padding: 12px 14px; border: 1px solid var(--line); border-radius: 13px; background: #303943; color: var(--text); opacity: 0; pointer-events: none; transform: translateY(9px); transition: .2s ease; font-size: 11px; }
 .toast.visible { opacity: 1; transform: translateY(0); }
 @media (min-width: 560px) {
   .app-shell { padding-top: 30px; }
