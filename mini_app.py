@@ -200,6 +200,14 @@ async def dashboard(request: web.Request) -> web.Response:
     )
     coefficient_stats = database.get_user_stats(user["id"])
     profile = await asyncio.to_thread(database.get_driver_profile, user["id"])
+    weekly_summary = summary
+    if period != "week":
+        weekly_summary = await asyncio.to_thread(
+            database.get_work_summary,
+            user["id"],
+            work_type,
+            _period_start("week"),
+        )
     district_groups = _build_district_groups(market_stats)
     return web.json_response({
         "user": {
@@ -209,6 +217,10 @@ async def dashboard(request: web.Request) -> web.Response:
         "work_type": work_type,
         "period": period,
         "summary": summary,
+        "weekly_goal": {
+            "target": profile.get("weekly_income_goal") or 0,
+            "net_income": weekly_summary["net_income"],
+        },
         "coefficient_stats": {
             "total_records": coefficient_stats.get("total_records", 0) or 0,
             "avg_coefficient": round(coefficient_stats.get("avg_coef") or 0, 2),

@@ -19,6 +19,9 @@
   let coefficientAreas = null;
   let coefficientMapDataSignature = null;
   let preferredName = "";
+  let activeMapTouches = 0;
+  let viewportFitPending = false;
+  let viewportFitTimer = null;
 
   if (tg) {
     tg.ready();
@@ -27,7 +30,7 @@
     if (tg.setBackgroundColor) tg.setBackgroundColor("#11151b");
     if (tg.onEvent) {
       tg.onEvent("viewportChanged", () => {
-        window.requestAnimationFrame(fitCoefficientMapToViewport);
+        scheduleMapViewportFit();
       });
     }
   }
@@ -143,6 +146,28 @@
       coefficientMap.container.fitToViewport();
     }
   }
+
+  function scheduleMapViewportFit() {
+    viewportFitPending = true;
+    window.clearTimeout(viewportFitTimer);
+    viewportFitTimer = window.setTimeout(() => {
+      if (activeMapTouches) return;
+      viewportFitPending = false;
+      fitCoefficientMapToViewport();
+    }, 300);
+  }
+
+  const mapContainer = $("coefficient-map");
+  mapContainer.addEventListener("touchstart", (event) => {
+    activeMapTouches = event.touches.length;
+    window.clearTimeout(viewportFitTimer);
+  }, { passive: true });
+  const finishMapTouch = (event) => {
+    activeMapTouches = event.touches.length;
+    if (!activeMapTouches && viewportFitPending) scheduleMapViewportFit();
+  };
+  mapContainer.addEventListener("touchend", finishMapTouch, { passive: true });
+  mapContainer.addEventListener("touchcancel", finishMapTouch, { passive: true });
 
   function updateWorkTypeButtons() {
     document.querySelectorAll("[data-work-type]").forEach((button) => {
@@ -688,6 +713,21 @@
     $("gross-income").textContent = currency.format(data.summary.gross_income + data.summary.tips);
     $("total-expenses").textContent = currency.format(data.summary.total_expenses);
     $("hours-worked").textContent = `${data.summary.hours_worked} ч`;
+    const weeklyGoal = data.weekly_goal;
+    const weeklyTarget = Number(weeklyGoal.target) || 0;
+    const weeklyNet = Number(weeklyGoal.net_income) || 0;
+    const goalProgress = weeklyTarget > 0
+      ? Math.max(0, Math.min(100, weeklyNet / weeklyTarget * 100))
+      : 0;
+    $("weekly-goal-title").textContent = weeklyTarget > 0
+      ? `${currency.format(weeklyNet)} из ${currency.format(weeklyTarget)}`
+      : "Цель не задана";
+    $("weekly-goal-progress").style.width = `${goalProgress}%`;
+    $("weekly-goal-caption").textContent = weeklyTarget > 0
+      ? weeklyNet >= weeklyTarget
+        ? "Цель недели достигнута — отличная работа!"
+        : `До цели осталось ${currency.format(weeklyTarget - weeklyNet)}.`
+      : "Укажи цель в профиле — приложение покажет прогресс.";
     renderChart(data.summary.chart);
     renderExpenseBreakdown(data.summary.expenses, data.summary.total_expenses);
     renderRecommendations(data.recommendations);
@@ -881,6 +921,8 @@
         const profile = await loadProfile();
         if (!profile.onboarding_complete) {
           onboardingForm.hidden = false;
+          $("onboarding-title").textContent = "Расскажи о себе";
+          $("onboarding-intro").textContent = "Заполни профиль один раз, чтобы открыть Taxi Forecast.";
           $("onboarding-message").textContent = "";
           $("onboarding-name").focus();
           return;
