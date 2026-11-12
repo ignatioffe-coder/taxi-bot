@@ -129,6 +129,8 @@ h3 { margin: 0; font-size: 15px; }
 #coefficient-map { height: 330px; overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: #dce5df; }
 .map-attribution { margin: 9px 0 0; color: var(--muted); font-size: 8px; line-height: 1.4; }
 .map-card .form-message { margin-top: 5px; }
+.map-card .form-message.map-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--red); }
+.map-retry { flex: 0 0 auto; padding: 6px 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); color: var(--text); font-size: 9px; font-weight: 700; }
 .map-legend { display: flex; flex-wrap: wrap; gap: 8px 11px; margin-top: 10px; }
 .map-legend span { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 8px; white-space: nowrap; }
 .legend-dot { width: 7px; height: 7px; border-radius: 50%; }
