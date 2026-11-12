@@ -64,6 +64,11 @@ def init_db():
         cursor.execute(
             "ALTER TABLE users ADD COLUMN onboarding_complete INTEGER NOT NULL DEFAULT 1"
         )
+    cursor.execute("""
+        UPDATE users
+        SET onboarding_complete = 0
+        WHERE onboarding_complete = 1 AND trim(preferred_name) = ''
+    """)
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS locations (
@@ -181,7 +186,11 @@ def add_user(user_id: int, username: str, first_name: str, last_name: str):
 def is_user_onboarded(user_id: int) -> bool:
     with closing(sqlite3.connect(config.DB_PATH)) as conn:
         row = conn.execute(
-            "SELECT onboarding_complete FROM users WHERE user_id = ?",
+            """
+            SELECT onboarding_complete
+            FROM users
+            WHERE user_id = ? AND trim(preferred_name) != ''
+            """,
             (user_id,),
         ).fetchone()
     return bool(row and row[0])
@@ -197,7 +206,8 @@ def complete_onboarding(user_id: int, preferred_name: str, work_type: str) -> bo
                 """
                 UPDATE users
                 SET preferred_name = ?, onboarding_complete = 1
-                WHERE user_id = ? AND onboarding_complete = 0
+                WHERE user_id = ?
+                  AND (onboarding_complete = 0 OR trim(preferred_name) = '')
                 """,
                 (preferred_name, user_id),
             )

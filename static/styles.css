@@ -65,6 +65,13 @@ h3 { margin: 0; font-size: 15px; }
 .meta-separator { color: #70695e; }
 .profit-decoration { position: absolute; right: -25px; bottom: -96px; width: 220px; height: 160px; border: 1px solid rgba(255, 191, 85, .1); border-radius: 50%; transform: rotate(-24deg); }
 .profit-decoration::after { position: absolute; inset: 14px; border: 1px solid rgba(255, 191, 85, .08); border-radius: 50%; content: ""; }
+.weekly-goal-card { margin-top: 10px; padding: 13px 15px; border: 1px solid rgba(124, 224, 177, .14); border-radius: 16px; background: linear-gradient(110deg, rgba(124, 224, 177, .08), rgba(25, 31, 40, .9)); }
+.weekly-goal-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.weekly-goal-heading .eyebrow { margin-bottom: 4px; }
+.weekly-goal-heading strong { font-size: 13px; letter-spacing: -.2px; }
+.weekly-goal-track { overflow: hidden; height: 6px; border-radius: 9px; background: var(--surface-soft); }
+.weekly-goal-track span { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #51c99b, #b4f2d4); transition: width .25s ease; }
+.weekly-goal-caption { margin: 8px 0 0; color: var(--muted); font-size: 10px; }
 .metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin-top: 10px; }
 .metric-card { min-width: 0; padding: 12px 11px; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); }
 .metric-icon { display: grid; width: 24px; height: 24px; margin-bottom: 9px; place-items: center; border-radius: 8px; font-size: 14px; font-weight: 800; }
@@ -136,7 +143,7 @@ h3 { margin: 0; font-size: 15px; }
 .map-heading .eyebrow { margin-bottom: 4px; }
 .map-heading h3 { font-size: 14px; }
 .map-badge { padding: 6px 8px; border-radius: 10px; background: rgba(124, 224, 177, .1); color: var(--mint); font-size: 9px; font-weight: 750; white-space: nowrap; }
-#coefficient-map { height: 330px; overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: #dce5df; }
+#coefficient-map { height: 330px; overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: #dce5df; touch-action: none; overscroll-behavior: contain; }
 .map-attribution { margin: 9px 0 0; color: var(--muted); font-size: 8px; line-height: 1.4; }
 .map-card .form-message { margin-top: 5px; }
 .map-card .form-message.map-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--red); }

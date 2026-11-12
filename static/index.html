@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#11151b">
   <title>Taxi Forecast</title>
-  <link rel="stylesheet" href="/static/styles.css?v=10">
+  <link rel="stylesheet" href="/static/styles.css?v=11">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/static/app.js?v=14" defer></script>
+  <script src="/static/app.js?v=15" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -50,6 +50,15 @@
         <div class="profit-meta"><span id="shift-count">0 смен</span><span class="meta-separator">·</span><span id="hourly-income">—/ч</span></div>
         <div class="profit-decoration" aria-hidden="true"></div>
       </article>
+
+      <section class="weekly-goal-card" aria-label="Цель по доходу на неделю">
+        <div class="weekly-goal-heading">
+          <div><p class="eyebrow">ЦЕЛЬ НА НЕДЕЛЮ</p><strong id="weekly-goal-title">Цель не задана</strong></div>
+          <button type="button" class="text-button" data-open-view="profile">Настроить</button>
+        </div>
+        <div class="weekly-goal-track"><span id="weekly-goal-progress"></span></div>
+        <p id="weekly-goal-caption" class="weekly-goal-caption">Укажи цель в профиле — приложение покажет прогресс.</p>
+      </section>
 
       <div class="metric-grid">
         <article class="metric-card"><span class="metric-icon income-icon">↗</span><span class="metric-label">Доходы всего</span><strong id="gross-income">—</strong></article>
@@ -189,8 +198,8 @@
     <div class="onboarding-card">
       <div class="brand-mark" aria-hidden="true">T</div>
       <p class="eyebrow">ПЕРВЫЙ ШАГ</p>
-      <h1>Расскажи о себе</h1>
-      <p class="onboarding-intro">Заполни профиль один раз, чтобы открыть Taxi Forecast.</p>
+      <h1 id="onboarding-title">Проверяем профиль…</h1>
+      <p id="onboarding-intro" class="onboarding-intro">Это займёт пару секунд.</p>
       <form id="onboarding-form" class="data-form" hidden>
         <label for="onboarding-name">Как тебя зовут? Только имя</label>
         <input id="onboarding-name" name="name" type="text" maxlength="40" autocomplete="given-name" required>

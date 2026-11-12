@@ -101,6 +101,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         dashboard = await response.json()
         self.assertEqual(dashboard["user"]["first_name"], "Driver")
+        self.assertEqual(dashboard["weekly_goal"], {"target": 0, "net_income": 0})
         self.assertEqual(len(dashboard["district_groups"]), 12)
         self.assertEqual(
             sum(len(group["districts"]) for group in dashboard["district_groups"]),
@@ -311,8 +312,14 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status, 200)
 
+        import database
+
+        profile = database.get_driver_profile(123456)
+        profile["weekly_income_goal"] = 20000
+        database.save_driver_profile(123456, profile)
+
         response = await self.client.get(
-            "/api/dashboard?work_type=taxi&period=week",
+            "/api/dashboard?work_type=taxi&period=day",
             headers=headers,
         )
         self.assertEqual(response.status, 200)
@@ -324,6 +331,10 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary["average_per_hour"], 1012.5)
         self.assertEqual(summary["shifts"], 1)
         self.assertEqual(len(summary["chart"]), 7)
+        self.assertEqual(
+            dashboard["weekly_goal"],
+            {"target": 20000, "net_income": 8100},
+        )
 
         response = await self.client.get(
             "/api/dashboard?work_type=courier&period=week",
@@ -378,7 +389,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual((await response.json())["user"]["first_name"], "Аня")
 
-    async def test_existing_users_stay_onboarded_after_schema_migration(self):
+    async def test_legacy_users_are_prompted_after_onboarding_migration(self):
         import database
 
         legacy_path = os.path.join(self.temp_dir.name, "legacy.db")
@@ -404,6 +415,8 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
                 )
                 conn.commit()
             database.init_db()
+            self.assertFalse(database.is_user_onboarded(789))
+            self.assertTrue(database.complete_onboarding(789, "Existing", "taxi"))
             self.assertTrue(database.is_user_onboarded(789))
         finally:
             config.DB_PATH = previous_db_path
