@@ -101,17 +101,33 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/")
         self.assertEqual(response.status, 200)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
-        self.assertIn("Taxi Forecast", await response.text())
+        html = await response.text()
+        self.assertIn("Taxi Forecast", html)
+        self.assertNotIn("leaflet", html.lower())
 
         response = await self.client.get("/static/app.js")
         self.assertEqual(response.status, 200)
         self.assertIn("Telegram.WebApp", await response.text())
+        self.assertIn("api-maps.yandex.ru/2.1/", await response.text())
 
         response = await self.client.get("/static/district-centers.json")
         self.assertEqual(response.status, 200)
         map_data = await response.json()
         self.assertEqual(map_data["license"], "ODbL 1.0")
         self.assertEqual(len(map_data["districts"]), 132)
+
+    async def test_yandex_maps_config_is_public_for_browser_loader(self):
+        previous_api_key = config.YANDEX_MAPS_API_KEY
+        config.YANDEX_MAPS_API_KEY = "browser-restricted-test-key"
+        try:
+            response = await self.client.get("/api/map-config")
+            self.assertEqual(response.status, 200)
+            self.assertEqual(
+                (await response.json())["yandex_maps_api_key"],
+                "browser-restricted-test-key",
+            )
+        finally:
+            config.YANDEX_MAPS_API_KEY = previous_api_key
 
     async def test_profile_requires_auth_and_saves_document_dates(self):
         response = await self.client.get("/api/profile")

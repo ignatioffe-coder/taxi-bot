@@ -11,6 +11,8 @@
   let period = "week";
   let districtGroups = [];
   let districtCenters = {};
+  let yandexMapsApiKey = null;
+  let yandexMapsPromise = null;
   let coefficientMap = null;
   let coefficientMarkers = null;
 
@@ -68,19 +70,25 @@
     if (!response.ok) throw new Error("Не удалось загрузить список районов.");
     const data = await response.json();
     renderDistricts(data.district_groups);
-    try {
-      const centersResponse = await fetch("/static/district-centers.json");
-      if (!centersResponse.ok) {
-        $("map-message").textContent = "Не удалось загрузить координаты районов.";
-        return;
-      }
-      const mapData = await centersResponse.json();
-      districtCenters = mapData.districts || {};
-      renderCoefficientMap(districtGroups);
-    } catch {
+    const [centersResponse, mapConfigResponse] = await Promise.all([
+      fetch("/static/district-centers.json"),
+      fetch("/api/map-config"),
+    ]);
+    if (!centersResponse.ok) {
       $("map-message").textContent = "Не удалось загрузить координаты районов.";
       return;
     }
+    if (!mapConfigResponse.ok) {
+      $("map-message").textContent = "Не удалось загрузить настройки карты.";
+      return;
+    }
+    const [mapData, mapConfig] = await Promise.all([
+      centersResponse.json(),
+      mapConfigResponse.json(),
+    ]);
+    districtCenters = mapData.districts || {};
+    yandexMapsApiKey = mapConfig.yandex_maps_api_key || "";
+    renderCoefficientMap(districtGroups);
   }
 
   function setView(view) {
@@ -91,7 +99,7 @@
       button.classList.toggle("active", button.dataset.view === view);
     });
     if (view === "districts" && coefficientMap) {
-      window.setTimeout(() => coefficientMap.invalidateSize(), 80);
+      window.setTimeout(() => coefficientMap.container.fitToViewport(), 80);
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -201,68 +209,107 @@
     return "#7ce0b1";
   }
 
+  function loadYandexMaps() {
+    if (yandexMapsPromise) return yandexMapsPromise;
+    const script = document.createElement("script");
+    const url = new URL("https://api-maps.yandex.ru/2.1/");
+    url.searchParams.set("apikey", yandexMapsApiKey);
+    url.searchParams.set("lang", "ru_RU");
+    script.src = url.toString();
+    yandexMapsPromise = new Promise((resolve, reject) => {
+      script.addEventListener("load", () => {
+        if (!window.ymaps) {
+          reject(new Error("Yandex Maps API did not initialize"));
+          return;
+        }
+        window.ymaps.ready(() => resolve(window.ymaps));
+      }, { once: true });
+      script.addEventListener("error", () => {
+        script.remove();
+        reject(new Error("Could not load Yandex Maps API"));
+      }, { once: true });
+      document.head.appendChild(script);
+    }).catch((error) => {
+      yandexMapsPromise = null;
+      throw error;
+    });
+    return yandexMapsPromise;
+  }
+
   function renderCoefficientMap(groups) {
     const badge = $("map-report-count");
-    if (!window.L) {
-      badge.textContent = "Карта недоступна";
-      $("map-message").textContent = "Не удалось загрузить библиотеку карты. Проверь подключение к интернету.";
+    if (yandexMapsApiKey === null) return;
+    if (!yandexMapsApiKey) {
+      badge.textContent = "Нужен API-ключ";
+      $("map-message").textContent = "Добавь YANDEX_MAPS_API_KEY в переменные окружения и ограничь ключ доменом Mini App.";
       return;
     }
     if (!Object.keys(districtCenters).length) return;
 
-    if (!coefficientMap) {
-      coefficientMap = window.L.map("coefficient-map", {
-        zoomControl: false,
-        scrollWheelZoom: false,
-      }).setView([55.751, 37.617], 9);
-      window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      }).addTo(coefficientMap);
-      window.L.control.zoom({ position: "topright" }).addTo(coefficientMap);
-      coefficientMarkers = window.L.layerGroup().addTo(coefficientMap);
-    }
-    coefficientMarkers.clearLayers();
     const districts = groups.flatMap((group) => group.districts);
     const reportingDistricts = districts.filter((district) => district.records > 0).length;
     badge.textContent = `${reportingDistricts} из ${districts.length} с данными`;
 
-    districts.forEach((district) => {
-      const center = districtCenters[district.name];
-      if (!center) return;
-      const hasData = district.records > 0;
-      const color = coefficientColor(district.avg_coefficient, hasData);
-      const marker = window.L.circleMarker([center.lat, center.lon], {
-        radius: hasData ? 7 : 5,
-        color,
-        fillColor: color,
-        weight: hasData ? 2 : 1,
-        fillOpacity: hasData ? 0.9 : 0.4,
-      });
-      const popup = document.createElement("div");
-      const title = document.createElement("div");
-      title.className = "map-popup-title";
-      title.textContent = district.name;
-      popup.appendChild(title);
-      if (hasData) {
-        const average = document.createElement("div");
-        average.className = "map-popup-value";
-        average.textContent = `Средний коэффициент: ${Number(district.avg_coefficient).toFixed(1)}x`;
-        const samples = document.createElement("div");
-        samples.textContent = `${district.records} ${plural(district.records, "замер", "замера", "замеров")}`;
-        popup.append(average, samples);
-      } else {
-        const empty = document.createElement("div");
-        empty.textContent = "Пока нет замеров от водителей";
-        popup.appendChild(empty);
+    loadYandexMaps().then((ymaps) => {
+      if (!coefficientMap) {
+        coefficientMap = new ymaps.Map("coefficient-map", {
+          center: [55.751, 37.617],
+          zoom: 8,
+          controls: ["zoomControl"],
+          behaviors: ["drag", "multiTouch"],
+        });
+        coefficientMarkers = new ymaps.GeoObjectCollection();
+        coefficientMap.geoObjects.add(coefficientMarkers);
       }
-      marker.bindPopup(popup);
-      marker.addTo(coefficientMarkers);
+      coefficientMarkers.removeAll();
+      const bounds = [[], []];
+
+      districts.forEach((district) => {
+        const center = districtCenters[district.name];
+        if (!center) return;
+        const coordinates = [center.lat, center.lon];
+        bounds[0][0] = bounds[0][0] === undefined
+          ? coordinates[0] : Math.min(bounds[0][0], coordinates[0]);
+        bounds[0][1] = bounds[0][1] === undefined
+          ? coordinates[1] : Math.min(bounds[0][1], coordinates[1]);
+        bounds[1][0] = bounds[1][0] === undefined
+          ? coordinates[0] : Math.max(bounds[1][0], coordinates[0]);
+        bounds[1][1] = bounds[1][1] === undefined
+          ? coordinates[1] : Math.max(bounds[1][1], coordinates[1]);
+
+        const hasData = district.records > 0;
+        const color = coefficientColor(district.avg_coefficient, hasData);
+        const sampleCount = Number(district.records) || 0;
+        const balloonBody = hasData
+          ? `Средний коэффициент: <strong>${Number(district.avg_coefficient).toFixed(1)}x</strong><br>${sampleCount} ${plural(sampleCount, "замер", "замера", "замеров")}`
+          : "Пока нет замеров от водителей";
+        coefficientMarkers.add(new ymaps.Placemark(
+          coordinates,
+          {
+            balloonContentHeader: district.name,
+            balloonContentBody: balloonBody,
+            hintContent: hasData
+              ? `${district.name} · ${Number(district.avg_coefficient).toFixed(1)}x`
+              : `${district.name} · нет замеров`,
+          },
+          {
+            preset: "islands#circleDotIcon",
+            iconColor: color,
+          },
+        ));
+      });
+
+      if (bounds[0].length) {
+        coefficientMap.setBounds(bounds, { checkZoomRange: true, zoomMargin: 20 });
+      }
+      $("map-message").textContent = "";
+      if (document.querySelector("#view-districts").classList.contains("active")) {
+        window.setTimeout(() => coefficientMap.container.fitToViewport(), 80);
+      }
+    }).catch(() => {
+      badge.textContent = "Карта недоступна";
+      $("map-message").textContent = "Не удалось загрузить Яндекс.Карты. Проверь API-ключ и разрешённый домен в кабинете Яндекса.";
     });
-    $("map-message").textContent = "";
-    if (document.querySelector("#view-districts").classList.contains("active")) {
-      window.setTimeout(() => coefficientMap.invalidateSize(), 80);
-    }
   }
 
   function applyDistrictSearch() {

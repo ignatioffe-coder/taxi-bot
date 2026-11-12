@@ -26,6 +26,9 @@ WEBAPP_URL = (
 if WEBAPP_URL and not WEBAPP_URL.startswith("https://"):
     raise ValueError("WEBAPP_URL должен быть публичным HTTPS-адресом.")
 
+# The browser-facing key is restricted to the Mini App domain in Yandex's dashboard.
+YANDEX_MAPS_API_KEY = os.getenv("YANDEX_MAPS_API_KEY", "").strip()
+
 # ID администратора (твой или брата) — для отчётов и управления
 ADMIN_IDS = [7925732814]  # Сделано списком, как в основном коде
 

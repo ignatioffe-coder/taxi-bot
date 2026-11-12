@@ -144,6 +144,13 @@ async def district_catalog(_request: web.Request) -> web.Response:
     return web.json_response({"district_groups": _build_district_groups(market_stats)})
 
 
+async def map_config(_request: web.Request) -> web.Response:
+    return web.json_response(
+        {"yandex_maps_api_key": config.YANDEX_MAPS_API_KEY},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 def _period_start(period: str) -> datetime:
     now = config.get_moscow_time()
     if period == "day":
@@ -417,6 +424,7 @@ def create_app() -> web.Application:
     app.router.add_get("/", index)
     app.router.add_static("/static/", path=STATIC_DIR)
     app.router.add_get("/api/districts", district_catalog)
+    app.router.add_get("/api/map-config", map_config)
     app.router.add_get("/api/dashboard", dashboard)
     app.router.add_get("/api/profile", get_profile)
     app.router.add_put("/api/profile", save_profile)
