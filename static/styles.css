@@ -129,12 +129,6 @@ h3 { margin: 0; font-size: 15px; }
 #coefficient-map { height: 330px; overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: #dce5df; }
 .map-attribution { margin: 9px 0 0; color: var(--muted); font-size: 8px; line-height: 1.4; }
 .map-card .form-message { margin-top: 5px; }
-.leaflet-container { font-family: inherit; }
-.leaflet-control-attribution { font-size: 8px !important; }
-.leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #191f28; color: var(--text); }
-.leaflet-popup-content { margin: 10px 12px; font-size: 11px; line-height: 1.5; }
-.map-popup-title { margin-bottom: 3px; font-weight: 750; }
-.map-popup-value { color: var(--mint); font-weight: 800; }
 .map-legend { display: flex; flex-wrap: wrap; gap: 8px 11px; margin-top: 10px; }
 .map-legend span { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 8px; white-space: nowrap; }
 .legend-dot { width: 7px; height: 7px; border-radius: 50%; }
