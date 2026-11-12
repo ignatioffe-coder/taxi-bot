@@ -90,6 +90,26 @@ class DemandForecastingTests(unittest.TestCase):
         self.assertEqual(forecast["items"][0]["score"], 100)
         self.assertEqual(forecast["items"][1]["score"], 0)
 
+    def test_courier_trend_compares_recent_and_previous_45_day_periods(self):
+        shifts = [
+            {
+                "district": self.district,
+                "gross_income": income,
+                "hours_worked": 10,
+                "timestamp": (self.now - timedelta(days=day)).isoformat(),
+            }
+            for day, income in ((5, 1000), (15, 1000), (50, 500), (60, 500))
+        ]
+
+        forecast = build_forecast("courier", {"shifts": shifts}, now=self.now)
+
+        item = forecast["items"][0]
+        self.assertEqual(item["trend"], "rising")
+        self.assertEqual(item["recent_samples"], 2)
+        self.assertEqual(item["historical_samples"], 2)
+        self.assertEqual(item["net_income_per_hour"], 100)
+        self.assertEqual(item["historical_net_income_per_hour"], 50)
+
     def test_empty_inputs_return_explanation_without_recommendations(self):
         taxi = build_forecast("taxi", {"reports": []}, now=self.now)
         courier = build_forecast("courier", {"shifts": []}, now=self.now)

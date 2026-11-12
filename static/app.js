@@ -534,11 +534,16 @@
       name.textContent = item.district;
       const note = document.createElement("span");
       note.className = "recommendation-note";
-      const trendLabels = {
+      const trendLabels = forecast.work_type === "taxi" ? {
         rising: "коэффициент растёт",
         falling: "коэффициент снижается",
         steady: "коэффициент стабилен",
         unknown: "динамика неизвестна",
+      } : {
+        rising: "доход/ч выше",
+        falling: "доход/ч ниже",
+        steady: "доход/ч стабилен",
+        unknown: "недостаточно истории для динамики",
       };
       note.textContent = `${item.sample_count} наблюдений · уверенность ${item.confidence}% · ${trendLabels[item.trend] || trendLabels.unknown}`;
       const metric = document.createElement("span");
@@ -548,7 +553,8 @@
           ? `История ${item.historical_coefficient}x`
           : `Сейчас ${item.current_coefficient}x`;
       } else {
-        metric.textContent = `${currency.format(item.net_income_per_hour || 0)}/ч`;
+        const periodLabel = item.recent_samples ? "Последние 45 дней" : "За 90 дней";
+        metric.textContent = `${periodLabel}: ${currency.format(item.net_income_per_hour || 0)}/ч`;
       }
       const track = document.createElement("div");
       track.className = "forecast-score-track";
