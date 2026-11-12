@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#11151b">
   <title>Taxi Forecast</title>
-  <link rel="stylesheet" href="/static/styles.css?v=12">
+  <link rel="stylesheet" href="/static/styles.css?v=13">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/static/app.js?v=16" defer></script>
+  <script src="/static/app.js?v=17" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -159,6 +159,16 @@
     <section class="view" id="view-profile">
       <div class="page-intro"><p class="eyebrow">ТВОИ ДАННЫЕ</p><h2>Профиль водителя</h2><p>Сохрани информацию о транспорте и сроках документов. Напомним в Telegram за 7 дней, за 1 день и в день окончания.</p></div>
       <section class="profile-identity"><span class="avatar" id="profile-avatar">В</span><div><p class="eyebrow">АККАУНТ TELEGRAM</p><strong id="profile-name">Водитель</strong></div></section>
+      <section class="profile-subscription-card" aria-label="Подписка Taxi Forecast">
+        <div class="profile-subscription-heading">
+          <div><p class="eyebrow">TAXI FORECAST</p><h3>Подписка</h3></div>
+          <span id="profile-subscription-badge" class="subscription-badge">Загрузка…</span>
+        </div>
+        <p id="profile-subscription-info" class="profile-subscription-info"></p>
+        <button id="profile-subscription-button" class="primary-button" type="button">
+          <span id="profile-subscription-button-label">Оплатить сейчас</span><span>→</span>
+        </button>
+      </section>
       <form id="profile-form" class="form-card data-form profile-form">
         <div class="form-heading"><span class="form-icon">◉</span><div><p class="eyebrow">О ТЕБЕ</p><h3>Работа и транспорт</h3></div></div>
         <label for="profile-work-type">Основной вид работы</label>
@@ -176,15 +186,17 @@
           <div class="field"><label for="weekly-income-goal">Цель на неделю, ₽</label><input id="weekly-income-goal" name="weekly_income_goal" type="number" min="0" max="1000000" step="1000" inputmode="decimal" placeholder="Например, 50000"></div>
         </div>
 
-        <div class="profile-documents">
-          <div class="section-heading"><div><p class="eyebrow">СРОКИ ДЕЙСТВИЯ</p><h3>Документы</h3></div></div>
-          <div id="document-status-list" class="document-status-list"></div>
-          <label for="medical-book-expiry">Медицинская книжка</label><input id="medical-book-expiry" name="medical_book_expiry" type="date">
-          <label for="license-expiry">Водительское удостоверение</label><input id="license-expiry" name="license_expiry" type="date">
-          <label for="osago-expiry">Полис ОСАГО</label><input id="osago-expiry" name="osago_expiry" type="date">
-          <label for="inspection-expiry">Техосмотр</label><input id="inspection-expiry" name="inspection_expiry" type="date">
-          <label for="taxi-permit-expiry">Разрешение такси</label><input id="taxi-permit-expiry" name="taxi_permit_expiry" type="date">
-        </div>
+        <details class="profile-documents">
+          <summary><span><small>СРОКИ ДЕЙСТВИЯ</small><strong>Документы</strong></span></summary>
+          <div class="profile-documents-content">
+            <div id="document-status-list" class="document-status-list"></div>
+            <label for="medical-book-expiry">Медицинская книжка</label><input id="medical-book-expiry" name="medical_book_expiry" type="date">
+            <label for="license-expiry">Водительское удостоверение</label><input id="license-expiry" name="license_expiry" type="date">
+            <label for="osago-expiry">Полис ОСАГО</label><input id="osago-expiry" name="osago_expiry" type="date">
+            <label for="inspection-expiry">Техосмотр</label><input id="inspection-expiry" name="inspection_expiry" type="date">
+            <label for="taxi-permit-expiry">Разрешение такси</label><input id="taxi-permit-expiry" name="taxi_permit_expiry" type="date">
+          </div>
+        </details>
 
         <label class="reminder-toggle" for="reminders-enabled"><span><strong>Напоминать в Telegram</strong><small>За 7 дней, за 1 день и в день окончания</small></span><input id="reminders-enabled" name="reminders_enabled" type="checkbox" checked></label>
         <button id="save-profile" class="primary-button" type="submit">Сохранить профиль <span>→</span></button>
@@ -207,7 +219,7 @@
         <ol>
           <li>Открой <a href="https://t.me/PremiumBot" id="premium-bot-link">официальный @PremiumBot</a> и нажми «Старт».</li>
           <li>Выбери покупку Telegram Stars и пополни баланс минимум на 300 ⭐ удобным способом.</li>
-          <li>Вернись сюда и нажми «Оплатить подписку».</li>
+          <li>Вернись сюда и нажми кнопку оплаты.</li>
         </ol>
         <p>Если Stars уже есть на балансе, пополнять его не нужно. Доступность способов покупки и цена в рублях зависят от Telegram, региона и устройства.</p>
       </details>
@@ -215,7 +227,7 @@
         <summary>Условия подписки</summary>
         <ul>
           <li>Пробный доступ — 7 дней с момента заполнения профиля, один раз на аккаунт Telegram.</li>
-          <li>После пробного периода оплата не списывается автоматически: подписку нужно оформить самостоятельно.</li>
+          <li>Подписку можно оплатить в любой момент. При ранней оплате 30-дневный период начинается сразу; если не оплачивать, после пробного периода автоматического списания не будет.</li>
           <li>После оплаты подписка стоит 300 ⭐ за 30 дней и автоматически продлевается каждые 30 дней.</li>
           <li>Автопродление можно отменить в Telegram: Настройки → Мои звёзды → Подписки. Доступ останется до конца оплаченного периода.</li>
           <li>По вопросам оплаты отправь команду /paysupport боту Taxi Forecast.</li>
@@ -226,7 +238,7 @@
         <span>Я прочитал(а) и принимаю <a href="#subscription-terms">условия подписки</a>.</span>
       </label>
       <button id="subscribe-button" class="primary-button" type="button" disabled>
-        Оплатить подписку <span>→</span>
+        <span id="subscribe-button-label">Оплатить подписку</span><span>→</span>
       </button>
       <p id="subscription-message" class="form-message" role="status"></p>
       <p class="subscription-support">Проблема с оплатой? Напиши боту <code>/paysupport</code>.</p>

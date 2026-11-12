@@ -53,17 +53,52 @@
     $("subscription-price-amount").textContent = `${access.price_stars || 300} ⭐`;
     $("subscription-period-label").textContent =
       `за ${access.period_days || 30} дней · автопродление`;
-    title.textContent = access.status === "paid"
-      ? "Подписка активна"
-      : "Пробный период закончился";
     if (access.status === "paid" && access.paid_until) {
+      title.textContent = "Подписка активна";
       status.textContent = `Доступ открыт до ${new Date(access.paid_until * 1000).toLocaleDateString("ru-RU")}.`;
+    } else if (access.status === "trial" && access.trial_expires_at) {
+      title.textContent = "Оплатить подписку сейчас";
+      status.textContent = `Пробный период бесплатный до ${new Date(access.trial_expires_at * 1000).toLocaleDateString("ru-RU")}. При оплате сейчас 30-дневная подписка начнётся сразу.`;
     } else if (access.trial_expires_at) {
+      title.textContent = "Пробный период закончился";
       status.textContent = `Бесплатный период завершился ${new Date(access.trial_expires_at * 1000).toLocaleDateString("ru-RU")}. Оформи подписку, чтобы продолжить.`;
     } else {
+      title.textContent = "Подписка Taxi Forecast";
       status.textContent = "После 7 дней бесплатно оформи подписку, чтобы пользоваться Taxi Forecast.";
     }
+    $("subscribe-button-label").textContent =
+      access.status === "trial" ? "Оплатить сейчас" : "Оплатить подписку";
     $("subscription-screen").hidden = false;
+  }
+
+  function renderProfileSubscription(access) {
+    const badge = $("profile-subscription-badge");
+    const info = $("profile-subscription-info");
+    const button = $("profile-subscription-button");
+    const endDate = (timestamp) => new Date(timestamp * 1000).toLocaleDateString("ru-RU");
+    button.hidden = !access;
+    if (!access) {
+      badge.textContent = "Недоступно";
+      info.textContent = "Заполни профиль, чтобы начать пробный период.";
+      return;
+    }
+
+    if (access.status === "trial") {
+      badge.textContent = "Пробный доступ";
+      badge.className = "subscription-badge trial";
+      info.textContent = `Бесплатно до ${endDate(access.trial_expires_at)}. Можно оплатить подписку сразу — 30-дневный период начнётся после оплаты.`;
+      $("profile-subscription-button-label").textContent = "Оплатить сейчас";
+    } else if (access.status === "paid") {
+      badge.textContent = "Активна";
+      badge.className = "subscription-badge";
+      info.textContent = `Доступ до ${endDate(access.paid_until)}. Подписка продлевается автоматически; отмена — в настройках Telegram → Мои звёзды → Подписки.`;
+      button.hidden = true;
+    } else {
+      badge.textContent = "Не активна";
+      badge.className = "subscription-badge expired";
+      info.textContent = `Пробный период завершился ${endDate(access.trial_expires_at)}. Оформи подписку за ${access.price_stars || 300} ⭐ на 30 дней.`;
+      $("profile-subscription-button-label").textContent = "Оформить подписку";
+    }
   }
 
   function showError(error) {
@@ -94,7 +129,7 @@
           : response.status === 403
             ? "Сначала заполни профиль: укажи имя и вид работы."
           : response.status === 409
-            ? "Пробный период или подписка ещё активны."
+            ? "Подписка уже активна."
           : "Сервис временно недоступен. Попробуй ещё раз.",
       );
       error.status = response.status;
@@ -692,6 +727,7 @@
   async function loadProfile() {
     const profile = await (await api("/api/profile")).json();
     currentSubscription = profile.subscription;
+    renderProfileSubscription(currentSubscription);
     const form = $("profile-form");
     const profileFields = [
       "work_type", "vehicle_type", "vehicle_make", "vehicle_model", "vehicle_year",
@@ -740,8 +776,7 @@
       tg.openTelegramLink(event.currentTarget.href);
     }
   });
-  $("subscribe-button").addEventListener("click", async (event) => {
-    const button = event.currentTarget;
+  async function startSubscriptionPayment(button) {
     button.disabled = true;
     $("subscription-message").textContent = "Готовим счёт Telegram Stars…";
     try {
@@ -774,6 +809,13 @@
       $("subscription-message").textContent = error.message || "Не удалось создать счёт.";
       button.disabled = !$("subscription-consent").checked;
     }
+  }
+
+  $("subscribe-button").addEventListener("click", (event) => {
+    startSubscriptionPayment(event.currentTarget);
+  });
+  $("profile-subscription-button").addEventListener("click", () => {
+    showSubscriptionScreen(currentSubscription);
   });
 
   async function loadDashboard() {
