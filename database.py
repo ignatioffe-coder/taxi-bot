@@ -343,7 +343,8 @@ def get_work_summary(user_id: int, work_type: str, since: datetime) -> Dict:
 
 
 def get_market_district_stats() -> Dict[str, Dict]:
-    """Return coefficient summaries for valid Moscow administrative districts."""
+    """Return two-hour coefficient summaries for valid Moscow districts."""
+    active_since = config.moscow_time_str(timedelta(hours=-2))
     with closing(sqlite3.connect(config.DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -351,8 +352,10 @@ def get_market_district_stats() -> Dict[str, Dict]:
             SELECT district, AVG(coefficient) AS avg_coefficient,
                    COUNT(*) AS records, MAX(timestamp) AS last_update
             FROM coefficients
+            WHERE timestamp >= ?
             GROUP BY district
-            """
+            """,
+            (active_since,),
         ).fetchall()
 
     valid_districts = set(config.MOSCOW_DISTRICTS)

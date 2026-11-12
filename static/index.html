@@ -7,7 +7,7 @@
   <title>Taxi Forecast</title>
   <link rel="stylesheet" href="/static/styles.css?v=9">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/static/app.js?v=12" defer></script>
+  <script src="/static/app.js?v=13" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -79,7 +79,7 @@
     </section>
 
     <section class="view" id="view-districts">
-      <div class="page-intro"><p class="eyebrow">СПРОС В ГОРОДЕ</p><h2>Карта коэффициентов</h2><p>Коэффициенты по сообщениям водителей. Нажми на точку, чтобы посмотреть данные района; серые точки пока без замеров.</p></div>
+      <div class="page-intro"><p class="eyebrow">СПРОС В ГОРОДЕ</p><h2>Карта коэффициентов</h2><p>Коэффициенты по сообщениям водителей действуют 2 часа. Нажми на район, чтобы посмотреть данные и время замера; серые районы пока без замеров.</p></div>
       <section class="map-card">
         <div class="map-heading"><div><p class="eyebrow">МОСКВА · 132 РАЙОНА</p><h3>Ситуация на карте</h3></div><span id="map-report-count" class="map-badge">Загрузка…</span></div>
         <div id="coefficient-map" role="application" aria-label="Карта коэффициентов по районам Москвы"></div>
@@ -91,7 +91,7 @@
           <span><i class="legend-dot high"></i>2,0–2,4x</span>
           <span><i class="legend-dot peak"></i>от 2,5x</span>
         </div>
-        <p class="map-attribution">Карта © Яндекс · координаты районов: OpenStreetMap contributors (ODbL)</p>
+        <p class="map-attribution">Карта © Яндекс · границы районов: OpenStreetMap contributors (ODbL)</p>
         <p id="map-message" class="form-message" role="status"></p>
       </section>
       <label class="search-box"><span>⌕</span><input id="district-search" type="search" placeholder="Найти район или округ"></label>

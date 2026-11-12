@@ -11,10 +11,12 @@
   let period = "week";
   let districtGroups = [];
   let districtCenters = {};
+  let districtBoundaries = {};
   let yandexMapsApiKey = null;
   let yandexMapsPromise = null;
   let coefficientMap = null;
-  let coefficientMarkers = null;
+  let coefficientMapHasInitialBounds = false;
+  let coefficientAreas = null;
 
   if (tg) {
     tg.ready();
@@ -80,18 +82,21 @@
 
   async function loadMapResources() {
     try {
-      const [centersResponse, mapConfigResponse] = await Promise.all([
+      const [centersResponse, boundariesResponse, mapConfigResponse] = await Promise.all([
         fetch("/static/district-centers.json"),
+        fetch("/static/district-boundaries.json"),
         fetch("/api/map-config"),
       ]);
-      if (!centersResponse.ok || !mapConfigResponse.ok) {
+      if (!centersResponse.ok || !boundariesResponse.ok || !mapConfigResponse.ok) {
         throw new Error("Не удалось загрузить настройки карты.");
       }
-      const [mapData, mapConfig] = await Promise.all([
+      const [mapData, boundaries, mapConfig] = await Promise.all([
         centersResponse.json(),
+        boundariesResponse.json(),
         mapConfigResponse.json(),
       ]);
       districtCenters = mapData.districts || {};
+      districtBoundaries = boundaries.districts || {};
       yandexMapsApiKey = mapConfig.yandex_maps_api_key || "";
       renderCoefficientMap(districtGroups);
     } catch (error) {
@@ -101,6 +106,13 @@
       );
       throw error;
     }
+  }
+
+  async function refreshMarketStats() {
+    const response = await fetch("/api/districts", { cache: "no-store" });
+    if (!response.ok) throw new Error("Не удалось обновить коэффициенты районов.");
+    const data = await response.json();
+    renderDistricts(data.district_groups);
   }
 
   function setView(view) {
@@ -192,7 +204,7 @@
         const statistic = document.createElement("span");
         statistic.className = "district-stat";
         statistic.textContent = district.records
-          ? `${district.avg_coefficient.toFixed(1)}x · ${district.records} зам.`
+          ? `${district.avg_coefficient.toFixed(1)}x · ${district.records} зам. · ${formatCoefficientTime(district.last_update)}`
           : "пока без замеров";
         if (district.records) statistic.classList.add("has-data");
         row.append(name, statistic);
@@ -231,6 +243,14 @@
     if (value >= 1.6) return "#ffb84c";
     if (value >= 1.3) return "#f3d16b";
     return "#7ce0b1";
+  }
+
+  function toYandexCoordinates(geometry) {
+    const convertRing = (ring) => ring.map(([longitude, latitude]) => [latitude, longitude]);
+    if (geometry.type === "Polygon") {
+      return geometry.coordinates.map(convertRing);
+    }
+    return geometry.coordinates.map((polygon) => polygon.map(convertRing));
   }
 
   function showMapError(text, retryAction = () => renderCoefficientMap(districtGroups)) {
@@ -317,15 +337,16 @@
           controls: ["zoomControl"],
           behaviors: ["drag", "multiTouch"],
         });
-        coefficientMarkers = new ymaps.GeoObjectCollection();
-        coefficientMap.geoObjects.add(coefficientMarkers);
+        coefficientAreas = new ymaps.GeoObjectCollection();
+        coefficientMap.geoObjects.add(coefficientAreas);
       }
-      coefficientMarkers.removeAll();
+      coefficientAreas.removeAll();
       const bounds = [[], []];
 
       districts.forEach((district) => {
         const center = districtCenters[district.name];
-        if (!center) return;
+        const boundary = districtBoundaries[district.name];
+        if (!center || !boundary) return;
         const coordinates = [center.lat, center.lon];
         bounds[0][0] = bounds[0][0] === undefined
           ? coordinates[0] : Math.min(bounds[0][0], coordinates[0]);
@@ -339,27 +360,34 @@
         const hasData = district.records > 0;
         const color = coefficientColor(district.avg_coefficient, hasData);
         const sampleCount = Number(district.records) || 0;
+        const reportedAt = formatCoefficientTime(district.last_update);
         const balloonBody = hasData
-          ? `Средний коэффициент: <strong>${Number(district.avg_coefficient).toFixed(1)}x</strong><br>${sampleCount} ${plural(sampleCount, "замер", "замера", "замеров")}`
+          ? `Средний коэффициент: <strong>${Number(district.avg_coefficient).toFixed(1)}x</strong><br>${sampleCount} ${plural(sampleCount, "замер", "замера", "замеров")}<br>Последний замер: ${reportedAt}`
           : "Пока нет замеров от водителей";
-        coefficientMarkers.add(new ymaps.Placemark(
-          coordinates,
-          {
+        coefficientAreas.add(new ymaps.GeoObject({
+          geometry: {
+            type: boundary.type,
+            coordinates: toYandexCoordinates(boundary),
+          },
+          properties: {
             balloonContentHeader: district.name,
             balloonContentBody: balloonBody,
             hintContent: hasData
-              ? `${district.name} · ${Number(district.avg_coefficient).toFixed(1)}x`
+              ? `${district.name} · ${Number(district.avg_coefficient).toFixed(1)}x · ${reportedAt}`
               : `${district.name} · нет замеров`,
           },
-          {
-            preset: "islands#circleDotIcon",
-            iconColor: color,
-          },
-        ));
+        }, {
+          fillColor: color,
+          fillOpacity: hasData ? 0.45 : 0.06,
+          strokeColor: hasData ? color : "#87939e",
+          strokeOpacity: 0.9,
+          strokeWidth: 1,
+        }));
       });
 
-      if (bounds[0].length) {
+      if (bounds[0].length && !coefficientMapHasInitialBounds) {
         coefficientMap.setBounds(bounds, { checkZoomRange: true, zoomMargin: 20 });
+        coefficientMapHasInitialBounds = true;
       }
       badge.textContent = `${reportingDistricts} из ${districts.length} с данными`;
       const message = $("map-message");
@@ -533,6 +561,16 @@
   function formatDate(value) {
     const date = new Date(value.replace(" ", "T") + "+03:00");
     return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short" }).format(date);
+  }
+
+  function formatCoefficientTime(value) {
+    if (!value) return "время неизвестно";
+    const date = new Date(value.replace(" ", "T") + "+03:00");
+    if (Number.isNaN(date.getTime())) return "время неизвестно";
+    return new Intl.DateTimeFormat("ru-RU", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
   }
 
   function updateShiftPreview() {
@@ -794,4 +832,11 @@
     $("shift-history").innerHTML = notice;
     loadDistrictCatalog().catch(showError);
   }
+  const refreshVisibleMarketStats = () => {
+    if (!document.hidden) refreshMarketStats().catch(showError);
+  };
+  window.setInterval(refreshVisibleMarketStats, 60_000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshVisibleMarketStats();
+  });
 })();
