@@ -385,8 +385,8 @@ async def create_subscription_invoice(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text="Accept the subscription terms before paying")
 
     access = await asyncio.to_thread(database.get_subscription_access, user["id"])
-    if access["status"] != "expired":
-        raise web.HTTPConflict(text="Your trial or subscription is still active")
+    if access["status"] == "paid":
+        raise web.HTTPConflict(text="Your subscription is already active")
 
     payment_bot = request.app.get(PAYMENT_BOT_KEY)
     if payment_bot is None:

@@ -198,10 +198,10 @@ def get_subscription_access(user_id: int, now: int | None = None) -> Dict:
 
     trial_expires_at = row["trial_expires_at"]
     paid_until = row["paid_until"]
-    if current_time < trial_expires_at:
-        status = "trial"
-    elif current_time < paid_until:
+    if current_time < paid_until:
         status = "paid"
+    elif current_time < trial_expires_at:
+        status = "trial"
     else:
         status = "expired"
     return {

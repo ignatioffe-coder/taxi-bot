@@ -179,12 +179,9 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
 
         headers = {"X-Telegram-Init-Data": self.init_data}
         await self.complete_onboarding(headers)
-        with closing(sqlite3.connect(self.db_path)) as conn:
-            conn.execute(
-                "UPDATE user_subscriptions SET trial_expires_at = ? WHERE user_id = ?",
-                (int(time.time()) - 1, 123456),
-            )
-            conn.commit()
+        self.assertEqual(
+            database.get_subscription_access(123456)["status"], "trial"
+        )
 
         response = await self.client.post(
             "/api/subscription/invoice",
@@ -208,6 +205,9 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             invoice["subscription_period"],
             subscriptions.SUBSCRIPTION_PERIOD_SECONDS,
         )
+        profile_response = await self.client.get("/api/profile", headers=headers)
+        profile = await profile_response.json()
+        self.assertEqual(profile["subscription"]["status"], "trial")
         self.assertTrue(
             database.validate_star_invoice(
                 123456,
@@ -243,6 +243,16 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             expiration,
         ))
         self.assertEqual(database.get_subscription_access(123456)["status"], "paid")
+        profile_response = await self.client.get("/api/profile", headers=headers)
+        profile = await profile_response.json()
+        self.assertEqual(profile["subscription"]["status"], "paid")
+        duplicate_invoice = await self.client.post(
+            "/api/subscription/invoice",
+            headers=headers,
+            json={"accept_terms": True},
+        )
+        self.assertEqual(duplicate_invoice.status, 409)
+        self.assertEqual(len(self.payment_bot.invoice_calls), 1)
         self.assertEqual(
             (
                 await self.client.get(
