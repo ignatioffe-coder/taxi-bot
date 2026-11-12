@@ -6,8 +6,35 @@
     currency: "RUB",
     maximumFractionDigits: 0,
   });
+  const reportCategoryLabels = {
+    high_demand: "Высокий спрос",
+    low_demand: "Мало заказов",
+    airport_queue: "Очередь в аэропорту",
+    few_cars: "Мало машин",
+    low_activity: "Низкая активность",
+    many_orders: "Много заказов",
+    long_wait: "Долгое ожидание",
+    restaurant_busy: "Задержка в ресторане",
+    order_problem: "Проблема с заказом",
+    delivery_problem: "Проблема с доставкой",
+    traffic: "Пробка",
+    accident: "ДТП",
+    road_closure: "Перекрытие дороги",
+  };
+  const reportCategories = {
+    taxi: [
+      "high_demand", "low_demand", "airport_queue", "few_cars",
+      "traffic", "accident", "road_closure",
+    ],
+    courier: [
+      "high_demand", "low_activity", "many_orders", "long_wait",
+      "restaurant_busy", "order_problem", "delivery_problem",
+      "traffic", "accident", "road_closure",
+    ],
+  };
   const hasTelegramAuth = Boolean(tg && tg.initData);
   let workType = "taxi";
+  let availableWorkTypes = [];
   let period = "week";
   let districtGroups = [];
   let districtCenters = {};
@@ -126,6 +153,12 @@
           ? "Проверь данные и обязательные поля."
           : response.status === 403
             ? "Сначала заполни профиль: укажи имя и вид работы."
+          : response.status === 409 && path.startsWith("/api/reports")
+            ? "Ты недавно уже отправлял такое сообщение. Попробуй позже."
+          : response.status === 429 && path.startsWith("/api/reports")
+            ? "Лимит сообщений на сегодня достигнут. Попробуй позже."
+          : response.status === 409 && path === "/api/privacy/delete"
+            ? "Сначала отмени автопродление подписки в настройках Telegram."
           : response.status === 409
             ? "Подписка уже активна."
           : "Сервис временно недоступен. Попробуй ещё раз.",
@@ -166,9 +199,121 @@
   }
 
   async function refreshMarketStats() {
-    const response = await api("/api/districts", { cache: "no-store" });
+    const query = new URLSearchParams({ work_type: workType });
+    const response = await api(`/api/districts?${query}`, { cache: "no-store" });
     const data = await response.json();
     renderDistricts(data.district_groups);
+  }
+
+  async function loadDriverReports() {
+    const query = new URLSearchParams({ work_type: workType });
+    const response = await api(`/api/reports?${query}`, { cache: "no-store" });
+    const data = await response.json();
+    renderDriverReports(data.reports || []);
+  }
+
+  async function loadCityWeather() {
+    const data = await (await api("/api/weather", { cache: "no-store" })).json();
+    const badge = $("city-weather");
+    badge.textContent = data.ok
+      ? `${data.text} · wttr.in`
+      : `${data.text} · погода недоступна`;
+    badge.classList.toggle("unavailable", !data.ok);
+  }
+
+  async function loadAdminPanel() {
+    if (!hasTelegramAuth) return;
+    const response = await fetch("/api/admin/summary", { headers });
+    if (response.status === 401 || response.status === 403) {
+      $("admin-panel").hidden = true;
+      return;
+    }
+    if (!response.ok) throw new Error("Не удалось загрузить панель администратора.");
+    const summary = await response.json();
+    const reportsResponse = await fetch("/api/admin/reports", { headers });
+    if (!reportsResponse.ok) {
+      throw new Error("Не удалось загрузить сообщения для модерации.");
+    }
+    const reports = (await reportsResponse.json()).reports || [];
+    renderAdminPanel(summary, reports);
+  }
+
+  function renderAdminPanel(summary, reports) {
+    const metrics = [
+      ["Пользователи", summary.total_users],
+      ["Активны за 30 дней", summary.active_30d],
+      ["Такси", summary.taxi_profiles],
+      ["Доставка", summary.courier_profiles],
+      ["Оба направления", summary.both_direction_users],
+      ["Смены", summary.work_shifts],
+      ["Активные сообщения", summary.active_reports],
+      ["Подписки и trial", summary.active_subscriptions],
+    ];
+    const metricsContainer = $("admin-metrics");
+    metricsContainer.replaceChildren();
+    metrics.forEach(([label, value]) => {
+      const card = document.createElement("div");
+      card.className = "admin-metric";
+      const title = document.createElement("span");
+      title.textContent = label;
+      const amount = document.createElement("strong");
+      amount.textContent = String(value || 0);
+      card.append(title, amount);
+      metricsContainer.appendChild(card);
+    });
+
+    const quality = $("admin-forecast-quality");
+    quality.replaceChildren();
+    const metricLabels = {
+      taxi: "Такси · средняя ошибка коэффициента",
+      courier: "Доставка · средняя ошибка дохода/ч",
+    };
+    Object.entries(summary.forecast_quality || {}).forEach(([type, data]) => {
+      const row = document.createElement("div");
+      row.className = "admin-quality-row";
+      const title = document.createElement("span");
+      title.textContent = metricLabels[type] || type;
+      const result = document.createElement("strong");
+      const error = data.mean_absolute_error === null
+        ? "пока нет проверенных прогнозов"
+        : type === "taxi"
+          ? `${data.mean_absolute_error.toFixed(2)}x`
+          : `${currency.format(data.mean_absolute_error)}/ч`;
+      result.textContent = `${error} · ${data.evaluated || 0} оценено`;
+      row.append(title, result);
+      quality.appendChild(row);
+    });
+
+    const reportsContainer = $("admin-reports");
+    reportsContainer.replaceChildren();
+    if (!reports.length) {
+      const empty = document.createElement("p");
+      empty.className = "empty-note";
+      empty.textContent = "Нет актуальных сообщений для модерации.";
+      reportsContainer.appendChild(empty);
+    }
+    reports.forEach((report) => {
+      const card = document.createElement("article");
+      card.className = "admin-report";
+      const heading = document.createElement("strong");
+      heading.textContent = `${report.work_type === "taxi" ? "Такси" : "Доставка"} · ${reportCategoryLabels[report.category] || report.category}`;
+      const meta = document.createElement("p");
+      meta.className = "admin-report-meta";
+      meta.textContent = `${report.district} · Telegram ID ${report.user_id} · ${formatCoefficientTime(report.created_at)} · ${report.status}`;
+      const details = document.createElement("p");
+      details.className = "driver-report-details";
+      details.textContent = report.details || "Без заметки";
+      const action = document.createElement("button");
+      action.className = "text-button";
+      action.type = "button";
+      action.dataset.moderateReport = "true";
+      action.dataset.reportId = String(report.id);
+      action.dataset.status = report.status === "active" ? "hidden" : "active";
+      action.textContent = report.status === "active" ? "Скрыть сообщение" : "Восстановить";
+      card.append(heading, meta, details, action);
+      reportsContainer.appendChild(card);
+    });
+    $("admin-panel").hidden = false;
   }
 
   function setView(view) {
@@ -183,6 +328,9 @@
         renderCoefficientMap(districtGroups, true);
         window.setTimeout(fitCoefficientMapToViewport, 250);
       });
+      if (hasTelegramAuth) {
+        Promise.all([refreshMarketStats(), loadDriverReports()]).catch(showError);
+      }
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -214,15 +362,39 @@
 
   function updateWorkTypeButtons() {
     document.querySelectorAll("[data-work-type]").forEach((button) => {
+      button.hidden = !availableWorkTypes.includes(button.dataset.workType);
       button.classList.toggle("active", button.dataset.workType === workType);
     });
-    $("profile-work-type").value = workType;
+    const typeSelect = $("profile-work-type");
+    const labels = { taxi: "Такси", courier: "Курьерская доставка" };
+    typeSelect.replaceChildren(
+      ...availableWorkTypes.map((type) => new Option(labels[type], type)),
+    );
+    typeSelect.value = workType;
+    const directionsList = $("profile-directions-list");
+    directionsList.replaceChildren();
+    availableWorkTypes.forEach((type) => {
+      const direction = document.createElement("span");
+      direction.className = "profile-direction-chip";
+      direction.textContent = labels[type];
+      directionsList.appendChild(direction);
+    });
+    const addDirectionButton = $("add-direction-button");
+    const missingType = availableWorkTypes.includes("taxi") ? "courier" : "taxi";
+    addDirectionButton.hidden = availableWorkTypes.length >= 2;
+    addDirectionButton.textContent = `Добавить ${labels[missingType].toLocaleLowerCase("ru")}`;
   }
 
   function setWorkType(value) {
+    if (!availableWorkTypes.includes(value)) {
+      showToast("Добавь это направление в профиле, чтобы начать.");
+      return;
+    }
     workType = value;
     updateWorkTypeButtons();
-    if (hasTelegramAuth) loadDashboard().catch(showError);
+    if (hasTelegramAuth) {
+      Promise.all([loadDashboard(), loadProfile(value)]).catch(showError);
+    }
   }
 
   function setPeriod(value) {
@@ -244,6 +416,60 @@
       select.appendChild(optgroup);
     });
     select.value = selectedValue;
+  }
+
+  function updateReportForm() {
+    const currentDistrict = $("report-district").value;
+    fillDistrictSelect($("report-district"), "Выбери район", currentDistrict);
+    const categorySelect = $("report-category");
+    const currentCategory = categorySelect.value;
+    categorySelect.replaceChildren(
+      new Option("Выбери событие", ""),
+      ...reportCategories[workType].map((category) => new Option(
+        reportCategoryLabels[category],
+        category,
+      )),
+    );
+    if (reportCategories[workType].includes(currentCategory)) {
+      categorySelect.value = currentCategory;
+    }
+  }
+
+  function renderDriverReports(reports) {
+    const container = $("driver-reports");
+    container.replaceChildren();
+    if (!reports.length) {
+      const empty = document.createElement("p");
+      empty.className = "empty-note";
+      empty.textContent = "Пока нет сообщений по выбранному виду работы. Поделись тем, что видишь.";
+      container.appendChild(empty);
+      return;
+    }
+
+    reports.forEach((report) => {
+      const card = document.createElement("article");
+      card.className = "driver-report";
+      const heading = document.createElement("div");
+      heading.className = "driver-report-heading";
+      const title = document.createElement("strong");
+      title.textContent = reportCategoryLabels[report.category] || "Обстановка";
+      const confidence = document.createElement("span");
+      confidence.className = `report-confidence ${report.confidence || "single"}`;
+      confidence.textContent = report.confidence === "high"
+        ? "3+ водителей"
+        : report.confidence === "corroborated"
+          ? "Подтвердили двое"
+          : "Одно сообщение";
+      heading.append(title, confidence);
+      const note = document.createElement("p");
+      note.className = "driver-report-details";
+      note.textContent = report.details || "Без дополнительной заметки";
+      const meta = document.createElement("span");
+      meta.className = "driver-report-meta";
+      meta.textContent = `${report.district} · ${formatCoefficientTime(report.created_at)} · до ${formatCoefficientTime(report.expires_at)}`;
+      card.append(heading, note, meta);
+      container.appendChild(card);
+    });
   }
 
   function renderDistricts(groups) {
@@ -277,8 +503,10 @@
         statistic.className = "district-stat";
         statistic.textContent = district.records
           ? `${district.avg_coefficient.toFixed(1)}x · ${district.records} зам. · ${formatCoefficientTime(district.last_update)}`
-          : "пока без замеров";
-        if (district.records) statistic.classList.add("has-data");
+          : district.report_count
+            ? `${district.report_count} ${plural(district.report_count, "сообщение", "сообщения", "сообщений")}`
+            : "пока без замеров";
+        if (district.records || district.report_count) statistic.classList.add("has-data");
         row.append(name, statistic);
         rows.appendChild(row);
       });
@@ -304,6 +532,7 @@
       "Не указывать",
       selectedShiftDistrict,
     );
+    updateReportForm();
     applyDistrictSearch();
     renderCoefficientMap(groups);
   }
@@ -400,6 +629,9 @@
       district.records,
       district.avg_coefficient,
       district.last_update,
+      district.report_count,
+      district.reporters,
+      district.report_categories,
     ]));
     badge.textContent = "Загружаем карту…";
     $("map-message").textContent = "";
@@ -441,12 +673,20 @@
           ? coordinates[1] : Math.max(bounds[1][1], coordinates[1]);
 
         const hasData = district.records > 0;
+        const reportCount = Number(district.report_count) || 0;
+        const reporterCount = Number(district.reporters) || 0;
         const color = coefficientColor(district.avg_coefficient, hasData);
         const sampleCount = Number(district.records) || 0;
         const reportedAt = formatCoefficientTime(district.last_update);
-        const balloonBody = hasData
+        const coefficientDescription = hasData
           ? `Средний коэффициент: <strong>${Number(district.avg_coefficient).toFixed(1)}x</strong><br>${sampleCount} ${plural(sampleCount, "замер", "замера", "замеров")}<br>Последний замер: ${reportedAt}`
-          : "Пока нет замеров от водителей";
+          : "Пока нет замеров коэффициента от водителей";
+        const communityDescription = reportCount
+          ? `Сообщения сообщества: <strong>${reportCount}</strong> · ${reporterCount} ${plural(reporterCount, "водитель", "водителя", "водителей")}`
+          : "";
+        const balloonBody = communityDescription
+          ? `${coefficientDescription}<br><br>${communityDescription}`
+          : coefficientDescription;
         coefficientAreas.add(new ymaps.GeoObject({
           geometry: {
             type: boundary.type,
@@ -456,13 +696,13 @@
             balloonContentHeader: district.name,
             balloonContentBody: balloonBody,
             hintContent: hasData
-              ? `${district.name} · ${Number(district.avg_coefficient).toFixed(1)}x · ${reportedAt}`
-              : `${district.name} · нет замеров`,
+              ? `${district.name} · ${Number(district.avg_coefficient).toFixed(1)}x${reportCount ? ` · ${reportCount} сообщ.` : ""} · ${reportedAt}`
+              : `${district.name} · ${reportCount ? `${reportCount} сообщ. сообщества` : "нет замеров"}`,
           },
         }, {
           fillColor: color,
           fillOpacity: hasData ? 0.45 : 0.06,
-          strokeColor: hasData ? color : "#87939e",
+          strokeColor: hasData ? color : reportCount ? "#ffbf55" : "#87939e",
           strokeOpacity: 0.9,
           strokeWidth: 1,
         }));
@@ -534,11 +774,16 @@
       name.textContent = item.district;
       const note = document.createElement("span");
       note.className = "recommendation-note";
-      const trendLabels = {
+      const trendLabels = forecast.work_type === "taxi" ? {
         rising: "коэффициент растёт",
         falling: "коэффициент снижается",
         steady: "коэффициент стабилен",
         unknown: "динамика неизвестна",
+      } : {
+        rising: "доход/ч выше",
+        falling: "доход/ч ниже",
+        steady: "доход/ч стабилен",
+        unknown: "недостаточно истории для динамики",
       };
       note.textContent = `${item.sample_count} наблюдений · уверенность ${item.confidence}% · ${trendLabels[item.trend] || trendLabels.unknown}`;
       const metric = document.createElement("span");
@@ -548,7 +793,8 @@
           ? `История ${item.historical_coefficient}x`
           : `Сейчас ${item.current_coefficient}x`;
       } else {
-        metric.textContent = `${currency.format(item.net_income_per_hour || 0)}/ч`;
+        const periodLabel = item.recent_samples ? "Последние 45 дней" : "За 90 дней";
+        metric.textContent = `${periodLabel}: ${currency.format(item.net_income_per_hour || 0)}/ч`;
       }
       const track = document.createElement("div");
       track.className = "forecast-score-track";
@@ -590,6 +836,32 @@
     });
   }
 
+  function renderWeekdayEfficiency(items) {
+    const container = $("weekday-efficiency");
+    container.replaceChildren();
+    const orderedDays = [1, 2, 3, 4, 5, 6, 0];
+    const labels = ["вс", "пн", "вт", "ср", "чт", "пт", "сб"];
+    const byDay = new Map(items.map((item) => [item.weekday, item]));
+    orderedDays.forEach((day) => {
+      const item = byDay.get(day);
+      if (!item) return;
+      const row = document.createElement("div");
+      row.className = "weekday-row";
+      const label = document.createElement("span");
+      label.textContent = labels[day];
+      const detail = document.createElement("span");
+      detail.textContent = `${currency.format(item.net_income_per_hour)}/ч · ${item.hours_worked} ч`;
+      row.append(label, detail);
+      container.appendChild(row);
+    });
+    if (!container.childElementCount) {
+      const empty = document.createElement("p");
+      empty.className = "empty-note";
+      empty.textContent = "Добавляй смены, чтобы сравнить эффективность по дням.";
+      container.appendChild(empty);
+    }
+  }
+
   function renderExpenseBreakdown(expenses, total) {
     const container = $("expense-breakdown");
     container.replaceChildren();
@@ -597,6 +869,12 @@
       ["fuel_cost", "Топливо"],
       ["commission_cost", "Комиссии"],
       ["maintenance_cost", "Обслуживание"],
+      ["rental_cost", "Аренда"],
+      ["insurance_cost", "Страхование"],
+      ["tax_cost", "Налоги"],
+      ["depreciation_cost", "Амортизация"],
+      ["charging_cost", "Зарядка"],
+      ["connectivity_cost", "Связь"],
       ["other_cost", "Другие"],
     ];
     labels.forEach(([key, label]) => {
@@ -641,7 +919,10 @@
 
     shifts.forEach((shift) => {
       const expenses = Number(shift.fuel_cost) + Number(shift.commission_cost)
-        + Number(shift.maintenance_cost) + Number(shift.other_cost);
+        + Number(shift.maintenance_cost) + Number(shift.other_cost)
+        + Number(shift.rental_cost || 0) + Number(shift.insurance_cost || 0)
+        + Number(shift.tax_cost || 0) + Number(shift.charging_cost || 0)
+        + Number(shift.connectivity_cost || 0);
       const net = Number(shift.gross_income) + Number(shift.tips) - expenses;
       const row = document.createElement("article");
       row.className = "shift-row";
@@ -687,7 +968,9 @@
     const read = (name) => Number($(`shift-form`).elements[name].value || 0);
     const income = read("gross_income") + read("tips");
     const expenses = read("fuel_cost") + read("commission_cost")
-      + read("maintenance_cost") + read("other_cost");
+    + read("maintenance_cost") + read("other_cost") + read("rental_cost")
+    + read("insurance_cost") + read("tax_cost") + read("charging_cost")
+    + read("connectivity_cost");
     const net = income - expenses;
     $("shift-net-preview").textContent = currency.format(net);
     $("shift-net-preview").style.color = net >= 0 ? "var(--mint)" : "var(--red)";
@@ -742,8 +1025,11 @@
     });
   }
 
-  async function loadProfile() {
-    const profile = await (await api("/api/profile")).json();
+  async function loadProfile(selectedWorkType = null) {
+    const query = selectedWorkType
+      ? `?${new URLSearchParams({ work_type: selectedWorkType })}`
+      : "";
+    const profile = await (await api(`/api/profile${query}`)).json();
     currentSubscription = profile.subscription;
     renderProfileSubscription(currentSubscription);
     const form = $("profile-form");
@@ -756,7 +1042,19 @@
       form.elements[field].value = profile[field] ?? "";
     });
     form.elements.reminders_enabled.checked = profile.reminders_enabled;
+    const notificationForm = $("notification-form");
+    const notifications = profile.notifications || {};
+    [
+      "demand_changes", "promising_areas", "weather_changes", "city_events",
+      "traffic_events", "personal_recommendations", "financial_reminders",
+    ].forEach((field) => {
+      notificationForm.elements[field].checked = Boolean(notifications[field]);
+    });
+    notificationForm.elements.frequency.value = notifications.frequency || "daily";
+    notificationForm.elements.quiet_start.value = notifications.quiet_start || "";
+    notificationForm.elements.quiet_end.value = notifications.quiet_end || "";
     workType = profile.work_type;
+    availableWorkTypes = profile.directions || [];
     updateWorkTypeButtons();
     preferredName = profile.preferred_name || "";
     const fullName = preferredName
@@ -771,7 +1069,7 @@
   async function refreshAfterPayment() {
     for (let attempt = 0; attempt < 6; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 700));
-      const profile = await loadProfile();
+      const profile = await loadProfile(workType);
       if (profile.subscription && profile.subscription.active) {
         $("subscription-screen").hidden = true;
         await loadDashboard();
@@ -852,6 +1150,23 @@
     $("gross-income").textContent = currency.format(data.summary.gross_income + data.summary.tips);
     $("total-expenses").textContent = currency.format(data.summary.total_expenses);
     $("hours-worked").textContent = `${data.summary.hours_worked} ч`;
+    $("economic-profit").textContent = currency.format(data.summary.economic_profit);
+    $("expenses-per-km").textContent = `${currency.format(data.summary.expenses_per_km)}/км`;
+    $("average-check").textContent = currency.format(data.summary.average_check);
+    $("average-order-duration").textContent = data.summary.orders_count
+      ? `${data.summary.average_order_duration_minutes} мин`
+      : "—";
+    const comparison = $("period-comparison");
+    if (data.summary.previous_period_shifts) {
+      const difference = data.summary.net_income
+        - data.summary.previous_period_net_income;
+      comparison.textContent = `${difference >= 0 ? "+" : "−"}${currency.format(Math.abs(difference))} к предыдущему периоду`;
+      comparison.classList.toggle("positive", difference >= 0);
+      comparison.classList.toggle("negative", difference < 0);
+    } else {
+      comparison.textContent = "Пока нет данных за предыдущий период для сравнения";
+      comparison.classList.remove("positive", "negative");
+    }
     const weeklyGoal = data.weekly_goal;
     const weeklyTarget = Number(weeklyGoal.target) || 0;
     const weeklyNet = Number(weeklyGoal.net_income) || 0;
@@ -868,11 +1183,13 @@
         : `До цели осталось ${currency.format(weeklyTarget - weeklyNet)}.`
       : "Укажи цель в профиле — приложение покажет прогресс.";
     renderChart(data.summary.chart);
-    renderExpenseBreakdown(data.summary.expenses, data.summary.total_expenses);
+    renderWeekdayEfficiency(data.summary.weekday_efficiency || []);
+    renderExpenseBreakdown(data.summary.expenses, data.summary.economic_expenses);
     renderRecommendations(data.forecast);
     renderShifts($("recent-shifts"), data.summary.recent_shifts, "За этот период смен ещё нет. Добавь первую в разделе «Смена».");
     renderShifts($("shift-history"), data.summary.recent_shifts, "За выбранный период смен ещё нет.");
     renderDistricts(data.district_groups);
+    await loadDriverReports();
   }
 
   function plural(count, one, few, many) {
@@ -896,6 +1213,26 @@
   $("profile-work-type").addEventListener("change", (event) => {
     setWorkType(event.currentTarget.value);
   });
+  $("add-direction-button").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const direction = availableWorkTypes.includes("taxi") ? "courier" : "taxi";
+    button.disabled = true;
+    try {
+      await api("/api/profile/directions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ work_type: direction }),
+      });
+      workType = direction;
+      await loadProfile(direction);
+      await loadDashboard();
+      showToast("Направление добавлено.");
+    } catch (error) {
+      showError(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
   document.querySelectorAll(".period-button").forEach((button) => {
     button.addEventListener("click", () => setPeriod(button.dataset.period));
   });
@@ -908,6 +1245,114 @@
   });
   $("district-search").addEventListener("input", applyDistrictSearch);
   $("shift-form").addEventListener("input", updateShiftPreview);
+  $("refresh-reports").addEventListener("click", () => {
+    loadDriverReports().catch(showError);
+  });
+  $("admin-refresh").addEventListener("click", () => {
+    loadAdminPanel().catch((error) => {
+      $("admin-message").textContent = error.message || "Не удалось обновить данные.";
+    });
+  });
+  $("admin-reports").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-moderate-report]");
+    if (!button) return;
+    button.disabled = true;
+    $("admin-message").textContent = "";
+    try {
+      const response = await fetch(`/api/admin/reports/${button.dataset.reportId}`, {
+        method: "PATCH",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ status: button.dataset.status }),
+      });
+
+      $("export-data").addEventListener("click", async (event) => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        $("privacy-message").textContent = "";
+        try {
+          const response = await api("/api/privacy/export");
+          const downloadUrl = URL.createObjectURL(await response.blob());
+          const link = document.createElement("a");
+          link.href = downloadUrl;
+          link.download = "moventa-data-export.json";
+          link.click();
+          window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+          $("privacy-message").textContent = "Копия данных подготовлена.";
+        } catch (error) {
+          $("privacy-message").textContent = error.message || "Не удалось скачать данные.";
+          showError(error);
+        } finally {
+          button.disabled = false;
+        }
+      });
+
+      $("delete-data").addEventListener("click", async (event) => {
+        if (!window.confirm(
+          "Удалить профиль и все данные Moventa? Это действие нельзя отменить.",
+        )) return;
+        const button = event.currentTarget;
+        button.disabled = true;
+        $("privacy-message").textContent = "";
+        try {
+          await api("/api/privacy/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ confirm: true }),
+          });
+          document.querySelectorAll(".onboarding-screen, .subscription-screen")
+            .forEach((screen) => { screen.hidden = true; });
+          const shell = document.querySelector(".app-shell");
+          shell.replaceChildren();
+          const message = document.createElement("section");
+          message.className = "privacy-card";
+          const title = document.createElement("h1");
+          title.textContent = "Данные удалены";
+          const detail = document.createElement("p");
+          detail.textContent = "Данные приложения удалены. При повторном запуске можно будет создать новый профиль.";
+          message.append(title, detail);
+          shell.appendChild(message);
+        } catch (error) {
+          $("privacy-message").textContent = error.message || "Не удалось удалить данные.";
+          showError(error);
+          button.disabled = false;
+        }
+      });
+      if (!response.ok) throw new Error("Не удалось изменить статус сообщения.");
+      await loadAdminPanel();
+    } catch (error) {
+      $("admin-message").textContent = error.message || "Не удалось выполнить модерацию.";
+      button.disabled = false;
+    }
+  });
+
+  $("report-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    $("report-message").textContent = "";
+    try {
+      await api("/api/reports", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          work_type: workType,
+          category: form.elements.category.value,
+          district: form.elements.district.value,
+          details: form.elements.details.value.trim(),
+        }),
+      });
+      form.elements.details.value = "";
+      $("report-message").textContent = "Спасибо! Сообщение появится на карте.";
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+      await Promise.all([loadDriverReports(), refreshMarketStats()]);
+    } catch (error) {
+      $("report-message").textContent = error.message || "Не удалось отправить сообщение.";
+      showError(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   $("profile-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -940,9 +1385,40 @@
       });
       $("profile-message").textContent = "Профиль сохранён.";
       if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
-      await loadProfile();
+      await loadProfile(workType);
       await loadDashboard();
     } catch (error) {
+      showError(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $("notification-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    $("notification-message").textContent = "";
+    const fields = [
+      "demand_changes", "promising_areas", "weather_changes", "city_events",
+      "traffic_events", "personal_recommendations", "financial_reminders",
+    ];
+    const payload = Object.fromEntries(
+      fields.map((field) => [field, form.elements[field].checked]),
+    );
+    payload.frequency = form.elements.frequency.value;
+    payload.quiet_start = form.elements.quiet_start.value;
+    payload.quiet_end = form.elements.quiet_end.value;
+    try {
+      await api("/api/notifications/preferences", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      $("notification-message").textContent = "Настройки сохранены.";
+    } catch (error) {
+      $("notification-message").textContent = error.message || "Не удалось сохранить настройки.";
       showError(error);
     } finally {
       button.disabled = false;
@@ -977,6 +1453,8 @@
       await loadDashboard();
       $("onboarding-screen").hidden = true;
       if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+      loadAdminPanel().catch(showError);
+      loadCityWeather().catch(showError);
       loadMapResources().catch(showError);
     } catch (error) {
       message.textContent = error.message || "Не удалось сохранить профиль. Попробуй ещё раз.";
@@ -1032,7 +1510,15 @@
           commission_cost: value("commission_cost"),
           maintenance_cost: value("maintenance_cost"),
           other_cost: value("other_cost"),
+          rental_cost: value("rental_cost"),
+          insurance_cost: value("insurance_cost"),
+          tax_cost: value("tax_cost"),
+          depreciation_cost: value("depreciation_cost"),
+          charging_cost: value("charging_cost"),
+          connectivity_cost: value("connectivity_cost"),
           hours_worked: value("hours_worked"),
+          distance_km: value("distance_km"),
+          orders_count: Number(form.elements.orders_count.value || 0),
         }),
       });
       const selectedDistrict = $("shift-district").value;
@@ -1078,6 +1564,8 @@
         }
         await loadDashboard();
         onboardingScreen.hidden = true;
+        loadAdminPanel().catch(showError);
+        loadCityWeather().catch(showError);
         loadMapResources().catch(showError);
       } catch (error) {
         if (error.status === 402) {
@@ -1098,7 +1586,9 @@
     $("shift-history").innerHTML = notice;
   }
   const refreshVisibleMarketStats = () => {
-    if (hasTelegramAuth && !document.hidden) refreshMarketStats().catch(showError);
+    if (hasTelegramAuth && !document.hidden) {
+      Promise.all([refreshMarketStats(), loadDriverReports()]).catch(showError);
+    }
   };
   window.setInterval(refreshVisibleMarketStats, 60_000);
   document.addEventListener("visibilitychange", () => {

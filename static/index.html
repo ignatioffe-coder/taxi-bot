@@ -5,16 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#11151b">
   <title>Taxi Forecast</title>
-  <link rel="stylesheet" href="/static/styles.css?v=14">
+  <link rel="stylesheet" href="/static/styles.css?v=18">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/static/app.js?v=19" defer></script>
+  <script src="/static/app.js?v=24" defer></script>
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true">T</div>
-        <div><p class="eyebrow">TAXI FORECAST</p><p class="brand-city">Москва · работа рядом</p></div>
+        <div><p class="eyebrow">TAXI FORECAST</p><p class="brand-city">Москва · работа рядом</p><p id="city-weather" class="brand-weather">Погода загружается…</p></div>
       </div>
       <button id="refresh" class="icon-button" aria-label="Обновить данные">↻</button>
     </header>
@@ -48,6 +48,7 @@
         <p class="profit-caption">Чистый доход</p>
         <strong class="profit-amount" id="net-income">—</strong>
         <div class="profit-meta"><span id="shift-count">0 смен</span><span class="meta-separator">·</span><span id="hourly-income">—/ч</span></div>
+        <p id="period-comparison" class="period-comparison"></p>
         <div class="profit-decoration" aria-hidden="true"></div>
       </article>
 
@@ -64,6 +65,10 @@
         <article class="metric-card"><span class="metric-icon income-icon">↗</span><span class="metric-label">Доходы всего</span><strong id="gross-income">—</strong></article>
         <article class="metric-card"><span class="metric-icon expense-icon">↘</span><span class="metric-label">Расходы</span><strong id="total-expenses">—</strong></article>
         <article class="metric-card"><span class="metric-icon hours-icon">◷</span><span class="metric-label">На линии</span><strong id="hours-worked">—</strong></article>
+        <article class="metric-card"><span class="metric-icon expense-icon">₽</span><span class="metric-label">Прибыль с амортизацией</span><strong id="economic-profit">—</strong></article>
+        <article class="metric-card"><span class="metric-icon hours-icon">⌁</span><span class="metric-label">Расходы на км</span><strong id="expenses-per-km">—</strong></article>
+        <article class="metric-card"><span class="metric-icon income-icon">↗</span><span class="metric-label">Средний чек</span><strong id="average-check">—</strong></article>
+        <article class="metric-card"><span class="metric-icon hours-icon">◷</span><span class="metric-label">Время на заказ</span><strong id="average-order-duration">—</strong></article>
       </div>
 
       <section class="section-block">
@@ -74,6 +79,10 @@
       <section class="section-block">
         <div class="section-heading"><div><p class="eyebrow">ДИНАМИКА</p><h2>Чистый доход</h2></div><span class="muted small-label">7 дней</span></div>
         <article class="chart-card"><div id="week-chart" class="week-chart"><p class="loading">Загружаем статистику…</p></div></article>
+      </section>
+      <section class="section-block">
+        <div class="section-heading"><div><p class="eyebrow">ЭФФЕКТИВНОСТЬ</p><h2>Доход/ч по дням недели</h2></div></div>
+        <div id="weekday-efficiency" class="weekday-efficiency"></div>
       </section>
 
       <section class="section-block">
@@ -100,10 +109,30 @@
           <span><i class="legend-dot medium"></i>1,6–1,9x</span>
           <span><i class="legend-dot high"></i>2,0–2,4x</span>
           <span><i class="legend-dot peak"></i>от 2,5x</span>
+          <span><i class="legend-dot community"></i>есть сообщения</span>
         </div>
         <p class="map-attribution">Карта © Яндекс · границы районов: OpenStreetMap contributors (ODbL)</p>
         <p id="map-message" class="form-message" role="status"></p>
       </section>
+      <section class="section-block reports-block">
+        <div class="section-heading"><div><p class="eyebrow">СООБЩЕНИЯ ВОДИТЕЛЕЙ</p><h2>Что происходит рядом</h2></div><button id="refresh-reports" class="text-button" type="button">Обновить</button></div>
+        <p class="reports-disclaimer">Сообщения от сообщества, не подтверждённые данные о заказах. Они автоматически исчезают через несколько часов.</p>
+        <div id="driver-reports" class="driver-reports"><p class="loading">Загружаем сообщения…</p></div>
+      </section>
+      <section class="form-card report-card">
+        <div class="form-heading"><span class="form-icon">◉</span><div><p class="eyebrow">СООБЩЕСТВО</p><h3>Сообщить об обстановке</h3></div></div>
+        <form id="report-form" class="data-form">
+          <label for="report-category">Что происходит</label>
+          <select id="report-category" name="category" required></select>
+          <label for="report-district">Район</label>
+          <select id="report-district" name="district" required><option value="">Выбери район</option></select>
+          <label for="report-details">Короткая заметка <span class="optional">необязательно</span></label>
+          <textarea id="report-details" name="details" maxlength="280" rows="2" placeholder="Например, очередь начинается у главного входа"></textarea>
+          <button class="primary-button" type="submit">Отправить сообщение <span>→</span></button>
+        </form>
+        <p id="report-message" class="form-message" role="status"></p>
+      </section>
+
       <label class="search-box"><span>⌕</span><input id="district-search" type="search" placeholder="Найти район или округ"></label>
       <div id="district-groups" class="district-groups"><p class="loading">Загружаем районы…</p></div>
 
@@ -136,12 +165,28 @@
           <div class="field"><label for="hours-input">Часов на линии</label><input id="hours-input" name="hours_worked" type="number" min="0" max="24" step="0.5" inputmode="decimal" placeholder="Например, 8"></div>
           <div class="field"><label for="fuel-cost-input">Топливо, ₽</label><input id="fuel-cost-input" name="fuel_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
         </div>
+        <div class="form-row">
+          <div class="field"><label for="orders-count-input">Заказов <span class="optional">необязательно</span></label><input id="orders-count-input" name="orders_count" type="number" min="0" max="1000" step="1" inputmode="numeric" placeholder="0"></div>
+          <div class="field"><label for="distance-km-input">Пробег, км <span class="optional">необязательно</span></label><input id="distance-km-input" name="distance_km" type="number" min="0" max="2000" step="0.1" inputmode="decimal" placeholder="0"></div>
+        </div>
 
         <details class="expense-details">
           <summary><span>Добавить остальные расходы</span><span class="summary-plus">＋</span></summary>
           <div class="form-row">
             <div class="field"><label for="commission-cost-input">Комиссии, ₽</label><input id="commission-cost-input" name="commission_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
             <div class="field"><label for="maintenance-cost-input">Обслуживание, ₽</label><input id="maintenance-cost-input" name="maintenance_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="rental-cost-input">Аренда, ₽</label><input id="rental-cost-input" name="rental_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
+            <div class="field"><label for="insurance-cost-input">Страхование, ₽</label><input id="insurance-cost-input" name="insurance_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="tax-cost-input">Налоги, ₽</label><input id="tax-cost-input" name="tax_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
+            <div class="field"><label for="depreciation-cost-input">Амортизация, ₽</label><input id="depreciation-cost-input" name="depreciation_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label for="charging-cost-input">Зарядка, ₽</label><input id="charging-cost-input" name="charging_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
+            <div class="field"><label for="connectivity-cost-input">Связь, ₽</label><input id="connectivity-cost-input" name="connectivity_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
           </div>
           <div class="field"><label for="other-cost-input">Другие расходы, ₽</label><input id="other-cost-input" name="other_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
         </details>
@@ -160,6 +205,19 @@
     <section class="view" id="view-profile">
       <div class="page-intro"><p class="eyebrow">ТВОИ ДАННЫЕ</p><h2>Профиль водителя</h2><p>Сохрани информацию о транспорте и сроках документов. Напомним в Telegram за 7 дней, за 1 день и в день окончания.</p></div>
       <section class="profile-identity"><span class="avatar" id="profile-avatar">В</span><div><p class="eyebrow">АККАУНТ TELEGRAM</p><strong id="profile-name">Водитель</strong></div></section>
+      <section class="profile-directions-card">
+        <div class="section-heading"><div><p class="eyebrow">НАПРАВЛЕНИЯ</p><h3>Твоя работа</h3></div></div>
+        <div id="profile-directions-list" class="profile-directions-list"></div>
+        <button id="add-direction-button" class="text-button" type="button">Добавить направление</button>
+      </section>
+      <section id="admin-panel" class="admin-panel" hidden>
+        <div class="section-heading"><div><p class="eyebrow">УПРАВЛЕНИЕ MOVENTA</p><h3>Панель администратора</h3></div><button id="admin-refresh" class="text-button" type="button">Обновить</button></div>
+        <div id="admin-metrics" class="admin-metrics"></div>
+        <div id="admin-forecast-quality" class="admin-forecast-quality"></div>
+        <p class="eyebrow admin-reports-label">АКТУАЛЬНЫЕ СООБЩЕНИЯ</p>
+        <div id="admin-reports" class="admin-reports"></div>
+        <p id="admin-message" class="form-message" role="status"></p>
+      </section>
       <section class="profile-subscription-card" aria-label="Подписка Taxi Forecast">
         <div class="profile-subscription-heading">
           <div><p class="eyebrow">TAXI FORECAST</p><h3>Подписка</h3></div>
@@ -203,6 +261,35 @@
         <button id="save-profile" class="primary-button" type="submit">Сохранить профиль <span>→</span></button>
         <p id="profile-message" class="form-message" role="status"></p>
       </form>
+      <section class="notification-card">
+        <div class="section-heading"><div><p class="eyebrow">УВЕДОМЛЕНИЯ</p><h3>Что присылать</h3></div></div>
+        <p>Настройки сохраняются в профиле. Сейчас доступны напоминания о документах; оповещения о спросе, погоде, мероприятиях и дорогах не отправляются, пока не подключены проверенные источники.</p>
+        <form id="notification-form" class="notification-form">
+          <label class="notification-option"><span>Изменения спроса</span><input type="checkbox" name="demand_changes"></label>
+          <label class="notification-option"><span>Перспективные районы</span><input type="checkbox" name="promising_areas"></label>
+          <label class="notification-option"><span>Погода</span><input type="checkbox" name="weather_changes"></label>
+          <label class="notification-option"><span>Мероприятия</span><input type="checkbox" name="city_events"></label>
+          <label class="notification-option"><span>Дорожные события</span><input type="checkbox" name="traffic_events"></label>
+          <label class="notification-option"><span>Персональные рекомендации</span><input type="checkbox" name="personal_recommendations"></label>
+          <label class="notification-option"><span>Напоминания о документах</span><input type="checkbox" name="financial_reminders"></label>
+          <div class="form-row">
+            <div class="field"><label for="notification-frequency">Частота новых уведомлений</label><select id="notification-frequency" name="frequency"><option value="immediate">Сразу</option><option value="hourly">Не чаще раза в час</option><option value="daily">Ежедневно</option></select></div>
+            <div class="field"><label for="quiet-start">Не беспокоить с</label><input id="quiet-start" name="quiet_start" type="time"></div>
+          </div>
+          <label for="quiet-end">Не беспокоить до</label><input id="quiet-end" name="quiet_end" type="time">
+          <button class="primary-button" type="submit">Сохранить настройки <span>→</span></button>
+        </form>
+        <p id="notification-message" class="form-message" role="status"></p>
+      </section>
+      <section class="privacy-card">
+        <div class="section-heading"><div><p class="eyebrow">КОНФИДЕНЦИАЛЬНОСТЬ</p><h3>Твои данные</h3></div></div>
+        <p>Можно скачать копию или удалить данные приложения. Перед удалением активной платной подписки сначала отмени её в настройках Telegram.</p>
+        <div class="privacy-actions">
+          <button id="export-data" class="text-button" type="button">Скачать копию</button>
+          <button id="delete-data" class="text-button danger-button" type="button">Удалить данные</button>
+        </div>
+        <p id="privacy-message" class="form-message" role="status"></p>
+      </section>
     </section>
 
     <footer class="app-footer">Доходы и расходы видны только тебе</footer>

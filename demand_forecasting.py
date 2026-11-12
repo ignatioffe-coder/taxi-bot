@@ -7,6 +7,7 @@ import config
 
 TAXI_HISTORY_DAYS = 30
 COURIER_HISTORY_DAYS = 90
+COURIER_RECENT_DAYS = 45
 TAXI_CURRENT_WINDOW = timedelta(hours=2)
 TAXI_MIN_HISTORY_SAMPLES = 3
 
@@ -149,9 +150,25 @@ def _taxi_forecast(inputs: dict, now: datetime) -> dict:
     }
 
 
-def _courier_forecast(inputs: dict) -> dict:
+def _courier_forecast(inputs: dict, now: datetime) -> dict:
     valid_districts = set(config.MOSCOW_DISTRICTS)
-    district_totals = defaultdict(lambda: {"income": 0.0, "hours": 0.0, "shifts": 0, "days": set()})
+    recent_since = now - timedelta(days=COURIER_RECENT_DAYS)
+    history_since = now - timedelta(days=COURIER_HISTORY_DAYS)
+
+    def period_totals():
+        return {"income": 0.0, "hours": 0.0, "shifts": 0, "days": set()}
+
+    def district_totals():
+        return {
+            "income": 0.0,
+            "hours": 0.0,
+            "shifts": 0,
+            "days": set(),
+            "recent": period_totals(),
+            "historical": period_totals(),
+        }
+
+    totals_by_district = defaultdict(district_totals)
 
     for shift in inputs.get("shifts", []):
         district = shift.get("district")
@@ -164,21 +181,37 @@ def _courier_forecast(inputs: dict) -> dict:
                 - float(shift.get("commission_cost") or 0)
                 - float(shift.get("maintenance_cost") or 0)
                 - float(shift.get("other_cost") or 0)
+                - float(shift.get("rental_cost") or 0)
+                - float(shift.get("insurance_cost") or 0)
+                - float(shift.get("tax_cost") or 0)
+                - float(shift.get("charging_cost") or 0)
+                - float(shift.get("connectivity_cost") or 0)
             )
         except (TypeError, ValueError):
             continue
         timestamp = _parse_timestamp(shift.get("timestamp"))
-        if district not in valid_districts or hours <= 0 or timestamp is None:
+        if (
+            district not in valid_districts
+            or hours <= 0
+            or timestamp is None
+            or timestamp > now
+            or timestamp < history_since
+        ):
             continue
-        total = district_totals[district]
+        total = totals_by_district[district]
         total["income"] += income
         total["hours"] += hours
         total["shifts"] += 1
         total["days"].add(timestamp.date())
+        period = total["recent"] if timestamp >= recent_since else total["historical"]
+        period["income"] += income
+        period["hours"] += hours
+        period["shifts"] += 1
+        period["days"].add(timestamp.date())
 
     rates = {
         district: total["income"] / total["hours"]
-        for district, total in district_totals.items()
+        for district, total in totals_by_district.items()
         if total["hours"] > 0
     }
     if not rates:
@@ -198,11 +231,41 @@ def _courier_forecast(inputs: dict) -> dict:
             "items": [],
         }
 
-    minimum_rate = min(rates.values())
-    maximum_rate = max(rates.values())
+    comparison_rates = {
+        district: (
+            total["recent"]["income"] / total["recent"]["hours"]
+            if total["recent"]["hours"] > 0 else rates[district]
+        )
+        for district, total in totals_by_district.items()
+    }
+    minimum_rate = min(comparison_rates.values())
+    maximum_rate = max(comparison_rates.values())
     items = []
-    for district, rate in rates.items():
-        total = district_totals[district]
+    for district, rate in comparison_rates.items():
+        total = totals_by_district[district]
+        recent_rate = (
+            total["recent"]["income"] / total["recent"]["hours"]
+            if total["recent"]["hours"] > 0 else None
+        )
+        historical_rate = (
+            total["historical"]["income"] / total["historical"]["hours"]
+            if total["historical"]["hours"] > 0 else None
+        )
+        change = (
+            recent_rate - historical_rate
+            if recent_rate is not None and historical_rate is not None
+            else None
+        )
+        threshold = (
+            max(abs(historical_rate) * 0.1, 25)
+            if historical_rate is not None else None
+        )
+        trend = (
+            "rising" if change is not None and change >= threshold
+            else "falling" if change is not None and change <= -threshold
+            else "steady" if change is not None
+            else "unknown"
+        )
         score = (
             50 if maximum_rate == minimum_rate
             else round((rate - minimum_rate) / (maximum_rate - minimum_rate) * 100)
@@ -215,9 +278,14 @@ def _courier_forecast(inputs: dict) -> dict:
             "district": district,
             "score": score,
             "confidence": confidence,
-            "trend": "unknown",
+            "trend": trend,
             "sample_count": total["shifts"],
+            "recent_samples": total["recent"]["shifts"],
+            "historical_samples": total["historical"]["shifts"],
             "net_income_per_hour": round(rate, 2),
+            "historical_net_income_per_hour": (
+                round(historical_rate, 2) if historical_rate is not None else None
+            ),
             "metric_label": "чистый доход/ч",
         })
 
@@ -229,9 +297,9 @@ def _courier_forecast(inputs: dict) -> dict:
         "horizon_minutes": None,
         "status": "available" if total_shifts >= 3 else "limited",
         "note": (
-            "Сравнение основано на вашей истории чистого дохода за час по районам "
-            "за последние 90 дней; балл сравнивает районы внутри этой истории. "
-            "Это не прогноз числа заказов и не учитывает "
+            "Балл сравнивает районы по вашей истории чистого дохода за час за "
+            "последние 90 дней. Динамика сравнивает последние 45 дней с предыдущими "
+            "45; это не прогноз числа заказов и не учитывает "
             "время начала смен, тип транспорта, погоду или конкуренцию."
         ),
         "empty_message": "Нет сохранённых смен с районом и часами работы.",
@@ -247,7 +315,7 @@ def build_forecast(work_type: str, inputs: dict, now: datetime | None = None) ->
     result = (
         _taxi_forecast(inputs, generated_at)
         if work_type == "taxi"
-        else _courier_forecast(inputs)
+        else _courier_forecast(inputs, generated_at)
     )
     result["generated_at"] = generated_at.isoformat(timespec="minutes")
     return result
