@@ -120,12 +120,16 @@ h3 { margin: 0; font-size: 15px; }
 .chart-bar { width: min(21px, 75%); min-height: 4px; border-radius: 7px 7px 3px 3px; background: linear-gradient(180deg, #ffcf79, #e99e38); }
 .chart-bar.negative { background: linear-gradient(180deg, #ff9a8f, #ca5a55); }
 .chart-label { color: var(--muted); font-size: 9px; }
+.forecast-note { margin: -4px 0 11px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .recommendations { display: grid; gap: 8px; }
-.recommendation { display: grid; grid-template-columns: 31px 1fr auto; align-items: center; gap: 10px; padding: 12px; }
+.recommendation { display: grid; grid-template-columns: 31px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 12px; }
 .recommendation-rank { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 10px; background: rgba(255, 191, 85, .1); color: var(--amber); font-size: 11px; font-weight: 800; }
 .recommendation-name { margin: 0 0 4px; font-size: 12px; font-weight: 700; }
-.recommendation-note { color: var(--muted); font-size: 10px; }
-.recommendation-coef { color: var(--mint); font-size: 17px; font-weight: 800; white-space: nowrap; }
+.recommendation-note, .forecast-metric { display: block; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.forecast-metric { margin-top: 3px; color: var(--text); font-weight: 700; }
+.forecast-score-track { height: 4px; margin-top: 8px; overflow: hidden; border-radius: 5px; background: var(--line); }
+.forecast-score-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--amber), var(--mint)); }
+.recommendation-coef { color: var(--mint); font-size: 14px; font-weight: 800; white-space: nowrap; }
 .text-button { padding: 6px 0 6px 8px; border: 0; background: transparent; color: var(--amber); font-size: 11px; font-weight: 700; }
 .recent-list { overflow: hidden; }
 .empty-note, .loading { padding: 20px 14px; color: var(--muted); text-align: center; font-size: 12px; line-height: 1.5; }

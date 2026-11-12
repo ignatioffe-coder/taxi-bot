@@ -113,11 +113,63 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         dashboard = await response.json()
         self.assertEqual(dashboard["user"]["first_name"], "Driver")
         self.assertEqual(dashboard["weekly_goal"], {"target": 0, "net_income": 0})
+        self.assertEqual(dashboard["forecast"]["work_type"], "taxi")
+        self.assertEqual(dashboard["forecast"]["status"], "insufficient_data")
         self.assertEqual(len(dashboard["district_groups"]), 12)
         self.assertEqual(
             sum(len(group["districts"]) for group in dashboard["district_groups"]),
             132,
         )
+
+    async def test_dashboard_forecast_scopes_courier_data_to_current_user(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        import database
+
+        district = config.MOSCOW_DISTRICTS[0]
+        other_district = config.MOSCOW_DISTRICTS[1]
+        timestamp = database.get_moscow_time().strftime("%Y-%m-%d %H:%M:%S")
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.executemany(
+                """
+                INSERT INTO coefficients (user_id, district, coefficient, timestamp)
+                VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (123456, district, 2.8, timestamp),
+                    (987654, district, 3.2, timestamp),
+                ],
+            )
+            conn.executemany(
+                """
+                INSERT INTO work_shifts (
+                    user_id, work_type, district, gross_income, hours_worked, timestamp
+                )
+                VALUES (?, 'courier', ?, ?, 10, ?)
+                """,
+                [
+                    (123456, district, 900, timestamp),
+                    (987654, other_district, 5000, timestamp),
+                ],
+            )
+            conn.commit()
+
+        taxi_response = await self.client.get(
+            "/api/dashboard?work_type=taxi&period=week",
+            headers=headers,
+        )
+        taxi_forecast = (await taxi_response.json())["forecast"]
+        self.assertEqual(taxi_forecast["items"][0]["district"], district)
+        self.assertEqual(taxi_forecast["items"][0]["sample_count"], 2)
+
+        courier_response = await self.client.get(
+            "/api/dashboard?work_type=courier&period=week",
+            headers=headers,
+        )
+        courier_forecast = (await courier_response.json())["forecast"]
+        self.assertEqual(len(courier_forecast["items"]), 1)
+        self.assertEqual(courier_forecast["items"][0]["district"], district)
+        self.assertEqual(courier_forecast["items"][0]["net_income_per_hour"], 90)
 
     async def test_district_catalog_requires_an_active_trial_or_subscription(self):
         response = await self.client.get("/api/districts")

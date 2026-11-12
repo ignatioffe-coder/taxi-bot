@@ -665,6 +665,57 @@ def get_market_district_stats() -> Dict[str, Dict]:
     }
 
 
+def get_demand_forecast_inputs(
+    user_id: int,
+    work_type: str,
+    now: datetime | None = None,
+) -> Dict[str, List[Dict]]:
+    """Load bounded, privacy-safe inputs for the selected forecast model."""
+    if work_type not in {"taxi", "courier"}:
+        raise ValueError("Unsupported work type")
+
+    current_time = now or get_moscow_time()
+    lookback_days = 30 if work_type == "taxi" else 90
+    since = (current_time - timedelta(days=lookback_days)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        conn.row_factory = sqlite3.Row
+        if work_type == "taxi":
+            rows = conn.execute(
+                """
+                SELECT user_id, district, coefficient, timestamp
+                FROM coefficients
+                WHERE timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp DESC
+                """,
+                (since, current_time.strftime("%Y-%m-%d %H:%M:%S")),
+            ).fetchall()
+            return {"reports": [dict(row) for row in rows], "shifts": []}
+
+        rows = conn.execute(
+            """
+            SELECT district, gross_income, tips, fuel_cost, commission_cost,
+                   maintenance_cost, other_cost, hours_worked, timestamp
+            FROM work_shifts
+            WHERE user_id = ?
+              AND work_type = ?
+              AND district IS NOT NULL
+              AND hours_worked > 0
+              AND timestamp >= ?
+              AND timestamp <= ?
+            ORDER BY timestamp DESC
+            """,
+            (
+                user_id,
+                work_type,
+                since,
+                current_time.strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        ).fetchall()
+        return {"reports": [], "shifts": [dict(row) for row in rows]}
+
+
 def get_driver_profile(user_id: int) -> Dict:
     """Return a driver's saved profile and document dates."""
     with closing(sqlite3.connect(config.DB_PATH)) as conn:
