@@ -18,11 +18,9 @@
   let coefficientMapHasInitialBounds = false;
   let coefficientAreas = null;
   let coefficientMapDataSignature = null;
+  let coefficientMapViewportSize = "";
   let preferredName = "";
   let currentSubscription = null;
-  let activeMapTouches = 0;
-  let viewportFitPending = false;
-  let viewportFitTimer = null;
 
   if (tg) {
     tg.ready();
@@ -31,7 +29,7 @@
     if (tg.setBackgroundColor) tg.setBackgroundColor("#11151b");
     if (tg.onEvent) {
       tg.onEvent("viewportChanged", () => {
-        scheduleMapViewportFit();
+        fitCoefficientMapToViewportIfResized();
       });
     }
   }
@@ -198,27 +196,21 @@
     }
   }
 
-  function scheduleMapViewportFit() {
-    viewportFitPending = true;
-    window.clearTimeout(viewportFitTimer);
-    viewportFitTimer = window.setTimeout(() => {
-      if (activeMapTouches) return;
-      viewportFitPending = false;
-      fitCoefficientMapToViewport();
-    }, 300);
+  function fitCoefficientMapToViewportIfResized() {
+    const { width, height } = mapContainer.getBoundingClientRect();
+    if (!width || !height) return;
+    const size = `${Math.round(width)}x${Math.round(height)}`;
+    if (size === coefficientMapViewportSize) return;
+    coefficientMapViewportSize = size;
+    fitCoefficientMapToViewport();
   }
 
   const mapContainer = $("coefficient-map");
-  mapContainer.addEventListener("touchstart", (event) => {
-    activeMapTouches = event.touches.length;
-    window.clearTimeout(viewportFitTimer);
-  }, { passive: true });
-  const finishMapTouch = (event) => {
-    activeMapTouches = event.touches.length;
-    if (!activeMapTouches && viewportFitPending) scheduleMapViewportFit();
-  };
-  mapContainer.addEventListener("touchend", finishMapTouch, { passive: true });
-  mapContainer.addEventListener("touchcancel", finishMapTouch, { passive: true });
+  if (typeof ResizeObserver !== "undefined") {
+    const mapResizeObserver = new ResizeObserver(fitCoefficientMapToViewportIfResized);
+    mapResizeObserver.observe(mapContainer);
+  }
+  window.addEventListener("resize", fitCoefficientMapToViewportIfResized);
 
   function updateWorkTypeButtons() {
     document.querySelectorAll("[data-work-type]").forEach((button) => {
