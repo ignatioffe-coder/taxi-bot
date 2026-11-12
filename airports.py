@@ -78,7 +78,9 @@ def airport_pressure(arrivals: list[dict], now, hours: int = 1) -> dict[str, flo
             continue
         raw = arrival.get("time")
         try:
-            moment = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            moment = datetime.fromisoformat(
+                str(raw).replace("Z", "+00:00")  # noqa: FURB162 - совместимость с 3.9/3.10
+            )
         except (TypeError, ValueError):
             continue
         if moment.tzinfo is not None:

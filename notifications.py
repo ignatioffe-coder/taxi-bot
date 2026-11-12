@@ -10,14 +10,16 @@
 проверять тестами без сети и без базы.
 """
 
-from datetime import datetime, timedelta
-
 import asyncio
+import logging
+from datetime import datetime, timedelta
 
 import config
 import database
 import demand_forecasting
 import external_factors
+
+logger = logging.getLogger(__name__)
 
 # Минимальный промежуток между уведомлениями одного вида
 FREQUENCY_MINUTES = {"immediate": 15, "hourly": 60, "daily": 1440}
@@ -165,7 +167,11 @@ async def send_due_notifications(bot) -> int:
             forecast = demand_forecasting.build_forecast(
                 work_type, inputs, now=now, factors=factors
             )
-        except Exception:  # noqa: BLE001 - один пользователь не должен ломать цикл
+        except Exception:
+            logger.exception(
+                "Не удалось построить прогноз для уведомления, user=%s",
+                recipient.get("user_id"),
+            )
             continue
 
         for kind, text in collect_messages(recipient, forecast, weather):
@@ -177,6 +183,11 @@ async def send_due_notifications(bot) -> int:
             try:
                 await bot.send_message(recipient["user_id"], text)
             except Exception:  # noqa: BLE001 - заблокировал бота и т.п.
+                logger.warning(
+                    "Не удалось отправить уведомление %s, user=%s",
+                    kind,
+                    recipient.get("user_id"),
+                )
                 continue
             await asyncio.to_thread(
                 database.log_notification,
