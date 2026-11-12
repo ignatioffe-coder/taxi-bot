@@ -505,13 +505,19 @@
     if (empty) empty.hidden = visibleGroups > 0;
   }
 
-  function renderRecommendations(items) {
+  function renderRecommendations(forecast) {
     const container = $("recommendations");
+    const items = forecast.items || [];
+    $("forecast-title").textContent = forecast.title || "Перспективные районы";
+    $("forecast-eyebrow").textContent = forecast.work_type === "taxi"
+      ? "СИГНАЛ НА БЛИЖАЙШИЙ ЧАС"
+      : "ЛИЧНАЯ АНАЛИТИКА";
+    $("forecast-note").textContent = forecast.note || "";
     container.replaceChildren();
     if (!items.length) {
       const empty = document.createElement("p");
       empty.className = "empty-note";
-      empty.textContent = "Пока недостаточно замеров для прогноза. Добавь коэффициент в разделе «Районы».";
+      empty.textContent = forecast.empty_message || "Пока недостаточно данных для оценки.";
       container.appendChild(empty);
       return;
     }
@@ -528,12 +534,32 @@
       name.textContent = item.district;
       const note = document.createElement("span");
       note.className = "recommendation-note";
-      note.textContent = `${item.data_points} замеров · уверенность ${item.reliability}%`;
-      info.append(name, note);
-      const coefficient = document.createElement("strong");
-      coefficient.className = "recommendation-coef";
-      coefficient.textContent = `${item.avg_coefficient.toFixed(1)}x`;
-      card.append(rank, info, coefficient);
+      const trendLabels = {
+        rising: "коэффициент растёт",
+        falling: "коэффициент снижается",
+        steady: "коэффициент стабилен",
+        unknown: "динамика неизвестна",
+      };
+      note.textContent = `${item.sample_count} наблюдений · уверенность ${item.confidence}% · ${trendLabels[item.trend] || trendLabels.unknown}`;
+      const metric = document.createElement("span");
+      metric.className = "forecast-metric";
+      if (item.current_coefficient !== undefined) {
+        metric.textContent = item.current_coefficient === null
+          ? `История ${item.historical_coefficient}x`
+          : `Сейчас ${item.current_coefficient}x`;
+      } else {
+        metric.textContent = `${currency.format(item.net_income_per_hour || 0)}/ч`;
+      }
+      const track = document.createElement("div");
+      track.className = "forecast-score-track";
+      const fill = document.createElement("span");
+      fill.style.width = `${item.score}%`;
+      track.appendChild(fill);
+      info.append(name, note, metric, track);
+      const score = document.createElement("strong");
+      score.className = "recommendation-coef";
+      score.textContent = `${item.score}/100`;
+      card.append(rank, info, score);
       container.appendChild(card);
     });
   }
@@ -843,7 +869,7 @@
       : "Укажи цель в профиле — приложение покажет прогресс.";
     renderChart(data.summary.chart);
     renderExpenseBreakdown(data.summary.expenses, data.summary.total_expenses);
-    renderRecommendations(data.recommendations);
+    renderRecommendations(data.forecast);
     renderShifts($("recent-shifts"), data.summary.recent_shifts, "За этот период смен ещё нет. Добавь первую в разделе «Смена».");
     renderShifts($("shift-history"), data.summary.recent_shifts, "За выбранный период смен ещё нет.");
     renderDistricts(data.district_groups);

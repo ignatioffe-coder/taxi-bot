@@ -1,0 +1,106 @@
+import os
+import unittest
+from datetime import datetime, timedelta
+
+os.environ.setdefault("BOT_TOKEN", "test-bot-token")
+
+import config
+from demand_forecasting import build_forecast
+
+
+class DemandForecastingTests(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime(2026, 1, 7, 10, 30)
+        self.district = config.MOSCOW_DISTRICTS[0]
+
+    def test_taxi_forecast_uses_recent_and_similar_time_reports(self):
+        reports = [
+            {
+                "district": self.district,
+                "coefficient": 3.0,
+                "timestamp": (self.now - timedelta(minutes=20)).isoformat(),
+                "user_id": 1,
+            },
+            *[
+                {
+                    "district": self.district,
+                    "coefficient": 1.5,
+                    "timestamp": (
+                        self.now - timedelta(days=7 * week)
+                    ).isoformat(),
+                    "user_id": week + 1,
+                }
+                for week in range(1, 4)
+            ],
+            {
+                "district": "Unknown district",
+                "coefficient": 5,
+                "timestamp": self.now.isoformat(),
+                "user_id": 5,
+            },
+            {
+                "district": self.district,
+                "coefficient": 5,
+                "timestamp": (self.now + timedelta(minutes=1)).isoformat(),
+                "user_id": 6,
+            },
+        ]
+
+        forecast = build_forecast("taxi", {"reports": reports}, now=self.now)
+
+        self.assertEqual(forecast["status"], "limited")
+        self.assertEqual(len(forecast["items"]), 1)
+        item = forecast["items"][0]
+        self.assertEqual(item["sample_count"], 4)
+        self.assertEqual(item["recent_samples"], 1)
+        self.assertEqual(item["historical_samples"], 3)
+        self.assertEqual(item["trend"], "rising")
+        self.assertEqual(item["current_coefficient"], 3.0)
+
+    def test_courier_forecast_ranks_net_income_per_hour(self):
+        shifts = [
+            {
+                "district": self.district,
+                "gross_income": 900,
+                "tips": 100,
+                "fuel_cost": 100,
+                "commission_cost": 100,
+                "hours_worked": 10,
+                "timestamp": (self.now - timedelta(days=day)).isoformat(),
+            }
+            for day in (1, 2, 3)
+        ] + [
+            {
+                "district": config.MOSCOW_DISTRICTS[1],
+                "gross_income": 400,
+                "tips": 0,
+                "fuel_cost": 0,
+                "commission_cost": 0,
+                "hours_worked": 10,
+                "timestamp": (self.now - timedelta(days=day)).isoformat(),
+            }
+            for day in (1, 2, 3)
+        ]
+
+        forecast = build_forecast("courier", {"shifts": shifts}, now=self.now)
+
+        self.assertEqual(forecast["status"], "available")
+        self.assertEqual(forecast["items"][0]["district"], self.district)
+        self.assertEqual(forecast["items"][0]["net_income_per_hour"], 80)
+        self.assertEqual(forecast["items"][0]["score"], 100)
+        self.assertEqual(forecast["items"][1]["score"], 0)
+
+    def test_empty_inputs_return_explanation_without_recommendations(self):
+        taxi = build_forecast("taxi", {"reports": []}, now=self.now)
+        courier = build_forecast("courier", {"shifts": []}, now=self.now)
+
+        self.assertEqual(taxi["status"], "insufficient_data")
+        self.assertTrue(taxi["empty_message"])
+        self.assertEqual(courier["status"], "insufficient_data")
+        self.assertTrue(courier["empty_message"])
+        self.assertEqual(taxi["items"], [])
+        self.assertEqual(courier["items"], [])
+
+
+if __name__ == "__main__":
+    unittest.main()
