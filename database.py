@@ -1,10 +1,12 @@
 """Работа с базой данных"""
 
 import sqlite3
+import time
 from contextlib import closing
 from datetime import date, datetime, timedelta
 from typing import List, Dict
 import config
+import subscriptions
 
 DOCUMENT_FIELDS = {
     "medical_book_expiry": ("medical_book", "Медицинская книжка"),
@@ -131,9 +133,237 @@ def init_db():
             UNIQUE (user_id, document_key, expiry_date, days_before)
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_subscriptions (
+            user_id INTEGER PRIMARY KEY,
+            trial_started_at INTEGER NOT NULL,
+            trial_expires_at INTEGER NOT NULL,
+            paid_until INTEGER NOT NULL DEFAULT 0,
+            invoice_payload TEXT NOT NULL DEFAULT '',
+            terms_accepted_at INTEGER,
+            latest_charge_id TEXT NOT NULL DEFAULT '',
+            updated_at INTEGER NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS telegram_star_payments (
+            telegram_payment_charge_id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            invoice_payload TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            total_amount INTEGER NOT NULL,
+            subscription_expires_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS payment_support_pending (
+            user_id INTEGER PRIMARY KEY,
+            requested_at INTEGER NOT NULL
+        )
+    """)
 
     conn.commit()
     conn.close()
+
+
+def get_subscription_access(user_id: int, now: int | None = None) -> Dict:
+    """Create the one-time trial on first eligible use and return access state."""
+    current_time = int(time.time()) if now is None else now
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        conn.row_factory = sqlite3.Row
+        with conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO user_subscriptions (
+                    user_id, trial_started_at, trial_expires_at, updated_at
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    user_id,
+                    current_time,
+                    current_time + subscriptions.TRIAL_SECONDS,
+                    current_time,
+                ),
+            )
+        row = conn.execute(
+            """
+            SELECT trial_started_at, trial_expires_at, paid_until
+            FROM user_subscriptions
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+
+    trial_expires_at = row["trial_expires_at"]
+    paid_until = row["paid_until"]
+    if current_time < trial_expires_at:
+        status = "trial"
+    elif current_time < paid_until:
+        status = "paid"
+    else:
+        status = "expired"
+    return {
+        "status": status,
+        "active": status != "expired",
+        "trial_started_at": row["trial_started_at"],
+        "trial_expires_at": trial_expires_at,
+        "paid_until": paid_until,
+    }
+
+
+def save_star_invoice(user_id: int, invoice_payload: str, now: int | None = None):
+    current_time = int(time.time()) if now is None else now
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        with conn:
+            updated = conn.execute(
+                """
+                UPDATE user_subscriptions
+                SET invoice_payload = ?, terms_accepted_at = ?, updated_at = ?
+                WHERE user_id = ?
+                """,
+                (invoice_payload, current_time, current_time, user_id),
+            )
+            if updated.rowcount != 1:
+                raise ValueError("Subscription trial has not been initialized")
+
+
+def validate_star_invoice(
+    user_id: int,
+    invoice_payload: str,
+    currency: str,
+    total_amount: int,
+) -> bool:
+    if (
+        currency != "XTR"
+        or total_amount != subscriptions.MONTHLY_PRICE_STARS
+        or not subscriptions.invoice_payload_belongs_to_user(invoice_payload, user_id)
+    ):
+        return False
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        row = conn.execute(
+            """
+            SELECT invoice_payload, terms_accepted_at
+            FROM user_subscriptions
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+    return bool(row and row[0] == invoice_payload and row[1])
+
+
+def record_star_payment(
+    user_id: int,
+    invoice_payload: str,
+    currency: str,
+    total_amount: int,
+    charge_id: str,
+    subscription_expires_at: int,
+    now: int | None = None,
+) -> bool:
+    current_time = int(time.time()) if now is None else now
+    if (
+        not charge_id
+        or subscription_expires_at <= current_time
+        or currency != "XTR"
+        or total_amount != subscriptions.MONTHLY_PRICE_STARS
+        or not subscriptions.invoice_payload_belongs_to_user(invoice_payload, user_id)
+    ):
+        return False
+
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        with conn:
+            existing = conn.execute(
+                """
+                SELECT user_id, invoice_payload, currency, total_amount,
+                       subscription_expires_at
+                FROM telegram_star_payments
+                WHERE telegram_payment_charge_id = ?
+                """,
+                (charge_id,),
+            ).fetchone()
+            if existing:
+                return existing == (
+                    user_id,
+                    invoice_payload,
+                    currency,
+                    total_amount,
+                    subscription_expires_at,
+                )
+            subscription = conn.execute(
+                """
+                SELECT invoice_payload, terms_accepted_at
+                FROM user_subscriptions
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+            if (
+                not subscription
+                or subscription[0] != invoice_payload
+                or not subscription[1]
+            ):
+                return False
+            inserted = conn.execute(
+                """
+                INSERT OR IGNORE INTO telegram_star_payments (
+                    telegram_payment_charge_id, user_id, invoice_payload,
+                    currency, total_amount, subscription_expires_at, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    charge_id,
+                    user_id,
+                    invoice_payload,
+                    currency,
+                    total_amount,
+                    subscription_expires_at,
+                    current_time,
+                ),
+            )
+            if inserted.rowcount != 1:
+                return False
+            conn.execute(
+                """
+                UPDATE user_subscriptions
+                SET paid_until = MAX(paid_until, ?),
+                    latest_charge_id = ?,
+                    updated_at = ?
+                WHERE user_id = ?
+                """,
+                (subscription_expires_at, charge_id, current_time, user_id),
+            )
+    return True
+
+
+def set_payment_support_pending(user_id: int, now: int | None = None):
+    current_time = int(time.time()) if now is None else now
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO payment_support_pending (user_id, requested_at)
+                VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET requested_at = excluded.requested_at
+                """,
+                (user_id, current_time),
+            )
+
+
+def consume_payment_support_pending(user_id: int) -> bool:
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        with conn:
+            deleted = conn.execute(
+                "DELETE FROM payment_support_pending WHERE user_id = ?",
+                (user_id,),
+            )
+    return deleted.rowcount == 1
+
+
+def cancel_payment_support_pending(user_id: int) -> bool:
+    return consume_payment_support_pending(user_id)
 
 
 def add_coefficient(user_id: int, username: str, district: str, 

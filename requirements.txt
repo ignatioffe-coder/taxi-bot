@@ -4,7 +4,7 @@
 # Код проверен на aiogram 3.31.0, matplotlib 3.11.2, numpy 2.5.4, pillow 12.3.0.
 
 # Telegram
-aiogram>=3.4.1,<4
+aiogram>=3.8.0,<4
 
 # Сеть и разбор страниц (погода, пробки)
 requests>=2.31,<3

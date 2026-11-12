@@ -13,13 +13,18 @@ from pathlib import Path
 from urllib.parse import parse_qsl
 
 from aiohttp import web
+from aiogram import Bot
+from aiogram.exceptions import TelegramAPIError
+from aiogram.types import LabeledPrice
 
 import config
 import database
 import heatmap
+import subscriptions
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+PAYMENT_BOT_KEY = web.AppKey("payment_bot", Bot)
 WEATHER_OPTIONS = {"", "Ясно", "Облачно", "Дождь", "Снег", "Туман", "Гроза"}
 WORK_TYPES = {"taxi", "courier"}
 VEHICLE_TYPES = {"", "car", "motorcycle", "bicycle", "scooter", "foot", "other"}
@@ -87,6 +92,9 @@ async def _onboarded_user(request: web.Request) -> dict:
     )
     if not await asyncio.to_thread(database.is_user_onboarded, user["id"]):
         raise web.HTTPForbidden(text="Complete your profile before using Taxi Forecast")
+    access = await asyncio.to_thread(database.get_subscription_access, user["id"])
+    if not access["active"]:
+        raise web.HTTPPaymentRequired(text="A current subscription is required")
     return user
 
 
@@ -154,6 +162,7 @@ def _build_district_groups(market_stats: dict) -> list[dict]:
 
 
 async def district_catalog(_request: web.Request) -> web.Response:
+    await _onboarded_user(_request)
     market_stats = await asyncio.to_thread(database.get_market_district_stats)
     return web.json_response(
         {"district_groups": _build_district_groups(market_stats)},
@@ -281,7 +290,7 @@ async def submit_shift(request: web.Request) -> web.Response:
     return web.json_response({"saved": True, "shift_id": shift_id})
 
 
-def _profile_response(profile: dict) -> dict:
+def _profile_response(profile: dict, subscription_access: dict | None = None) -> dict:
     fields = (
         "work_type", "vehicle_type", "vehicle_make", "vehicle_model",
         "vehicle_year", "fuel_type", "weekly_income_goal", "reminders_enabled",
@@ -303,6 +312,7 @@ def _profile_response(profile: dict) -> dict:
         "last_name": profile.get("last_name") or "",
         "preferred_name": profile.get("preferred_name") or "",
         "onboarding_complete": bool(profile.get("onboarding_complete")),
+        "subscription": subscription_access,
     })
     return result
 
@@ -317,7 +327,16 @@ async def get_profile(request: web.Request) -> web.Response:
         user.get("last_name", ""),
     )
     profile = await asyncio.to_thread(database.get_driver_profile, user["id"])
-    return web.json_response(_profile_response(profile))
+    subscription_access = None
+    if profile.get("onboarding_complete") and profile.get("preferred_name"):
+        subscription_access = await asyncio.to_thread(
+            database.get_subscription_access, user["id"]
+        )
+        subscription_access.update({
+            "price_stars": subscriptions.MONTHLY_PRICE_STARS,
+            "period_days": subscriptions.SUBSCRIPTION_PERIOD_SECONDS // (24 * 60 * 60),
+        })
+    return web.json_response(_profile_response(profile, subscription_access))
 
 
 async def complete_onboarding(request: web.Request) -> web.Response:
@@ -349,7 +368,60 @@ async def complete_onboarding(request: web.Request) -> web.Response:
         name.strip(),
         work_type,
     )
+    await asyncio.to_thread(database.get_subscription_access, user["id"])
     return web.json_response({"completed": True})
+
+
+async def create_subscription_invoice(request: web.Request) -> web.Response:
+    user = _authenticated_user(request)
+    if not await asyncio.to_thread(database.is_user_onboarded, user["id"]):
+        raise web.HTTPForbidden(text="Complete your profile before subscribing")
+
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, web.HTTPException):
+        raise web.HTTPBadRequest(text="Request body must be valid JSON")
+    if not isinstance(payload, dict) or payload.get("accept_terms") is not True:
+        raise web.HTTPBadRequest(text="Accept the subscription terms before paying")
+
+    access = await asyncio.to_thread(database.get_subscription_access, user["id"])
+    if access["status"] != "expired":
+        raise web.HTTPConflict(text="Your trial or subscription is still active")
+
+    payment_bot = request.app.get(PAYMENT_BOT_KEY)
+    if payment_bot is None:
+        raise web.HTTPServiceUnavailable(text="Telegram payments are not configured")
+
+    invoice_payload = subscriptions.create_invoice_payload(user["id"])
+    try:
+        invoice_url = await payment_bot.create_invoice_link(
+            title="Taxi Forecast — 30 дней",
+            description=(
+                f"Доступ ко всем функциям Taxi Forecast на 30 дней "
+                f"за {subscriptions.MONTHLY_PRICE_STARS} ⭐. "
+                "Автопродление — каждые 30 дней."
+            ),
+            payload=invoice_payload,
+            provider_token="",
+            currency="XTR",
+            prices=[
+                LabeledPrice(
+                    label="Подписка на 30 дней",
+                    amount=subscriptions.MONTHLY_PRICE_STARS,
+                )
+            ],
+            subscription_period=subscriptions.SUBSCRIPTION_PERIOD_SECONDS,
+        )
+    except TelegramAPIError:
+        logger.exception("Could not create Stars invoice for user %s", user["id"])
+        raise web.HTTPBadGateway(text="Could not create a Telegram Stars invoice")
+
+    await asyncio.to_thread(
+        database.save_star_invoice,
+        user["id"],
+        invoice_payload,
+    )
+    return web.json_response({"invoice_url": invoice_url})
 
 
 async def save_profile(request: web.Request) -> web.Response:
@@ -464,14 +536,16 @@ async def submit_coefficient(request: web.Request) -> web.Response:
     return web.json_response({"saved": True})
 
 
-def create_app() -> web.Application:
+def create_app(payment_bot: Bot | None = None) -> web.Application:
     app = web.Application()
+    app[PAYMENT_BOT_KEY] = payment_bot
     app.router.add_get("/", index)
     app.router.add_static("/static/", path=STATIC_DIR)
     app.router.add_get("/api/districts", district_catalog)
     app.router.add_get("/api/map-config", map_config)
     app.router.add_get("/api/dashboard", dashboard)
     app.router.add_get("/api/profile", get_profile)
+    app.router.add_post("/api/subscription/invoice", create_subscription_invoice)
     app.router.add_post("/api/onboarding", complete_onboarding)
     app.router.add_put("/api/profile", save_profile)
     app.router.add_post("/api/coefficients", submit_coefficient)

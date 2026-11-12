@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#11151b">
   <title>Taxi Forecast</title>
-  <link rel="stylesheet" href="/static/styles.css?v=11">
+  <link rel="stylesheet" href="/static/styles.css?v=12">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/static/app.js?v=15" defer></script>
+  <script src="/static/app.js?v=16" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -194,6 +194,44 @@
 
     <footer class="app-footer">Доходы и расходы видны только тебе</footer>
   </main>
+  <section id="subscription-screen" class="subscription-screen" hidden role="dialog" aria-modal="true" aria-labelledby="subscription-title">
+    <div class="subscription-card">
+      <div class="brand-mark" aria-hidden="true">T</div>
+      <p class="eyebrow">ПОДПИСКА TAXI FORECAST</p>
+      <h1 id="subscription-title">Пробный период закончился</h1>
+      <p id="subscription-status" class="subscription-intro">Полный доступ на 7 дней бесплатно, затем подписка.</p>
+      <div class="subscription-price"><strong id="subscription-price-amount">300 ⭐</strong><span id="subscription-period-label">за 30 дней · автопродление</span></div>
+      <p class="subscription-price-note">Примерно соответствует прежнему ориентиру 500 ₽. Фактическая цена покупки Stars зависит от региона и способа оплаты.</p>
+      <details class="subscription-help">
+        <summary>Как купить звёзды через @PremiumBot</summary>
+        <ol>
+          <li>Открой <a href="https://t.me/PremiumBot" id="premium-bot-link">официальный @PremiumBot</a> и нажми «Старт».</li>
+          <li>Выбери покупку Telegram Stars и пополни баланс минимум на 300 ⭐ удобным способом.</li>
+          <li>Вернись сюда и нажми «Оплатить подписку».</li>
+        </ol>
+        <p>Если Stars уже есть на балансе, пополнять его не нужно. Доступность способов покупки и цена в рублях зависят от Telegram, региона и устройства.</p>
+      </details>
+      <details id="subscription-terms" class="subscription-help">
+        <summary>Условия подписки</summary>
+        <ul>
+          <li>Пробный доступ — 7 дней с момента заполнения профиля, один раз на аккаунт Telegram.</li>
+          <li>После пробного периода оплата не списывается автоматически: подписку нужно оформить самостоятельно.</li>
+          <li>После оплаты подписка стоит 300 ⭐ за 30 дней и автоматически продлевается каждые 30 дней.</li>
+          <li>Автопродление можно отменить в Telegram: Настройки → Мои звёзды → Подписки. Доступ останется до конца оплаченного периода.</li>
+          <li>По вопросам оплаты отправь команду /paysupport боту Taxi Forecast.</li>
+        </ul>
+      </details>
+      <label class="subscription-consent" for="subscription-consent">
+        <input id="subscription-consent" type="checkbox">
+        <span>Я прочитал(а) и принимаю <a href="#subscription-terms">условия подписки</a>.</span>
+      </label>
+      <button id="subscribe-button" class="primary-button" type="button" disabled>
+        Оплатить подписку <span>→</span>
+      </button>
+      <p id="subscription-message" class="form-message" role="status"></p>
+      <p class="subscription-support">Проблема с оплатой? Напиши боту <code>/paysupport</code>.</p>
+    </div>
+  </section>
   <section id="onboarding-screen" class="onboarding-screen" hidden>
     <div class="onboarding-card">
       <div class="brand-mark" aria-hidden="true">T</div>

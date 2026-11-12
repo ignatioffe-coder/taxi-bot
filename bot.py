@@ -3,15 +3,22 @@
 import asyncio
 import logging
 import os
+import time
 
 from aiohttp import web
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from aiogram.types import (
+    BotCommand,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    WebAppInfo,
+)
 
 import config
 import database
+import subscriptions
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -69,12 +76,150 @@ async def cmd_help(message: types.Message):
     await send_app_launcher(
         message,
         "Все функции Taxi Forecast находятся в Mini App. "
-        "Открой его кнопкой под этим сообщением.",
+        "Открой его кнопкой под этим сообщением.\n\n"
+        "Пробный период — 7 дней, затем подписка 300 ⭐ за 30 дней. "
+        "Условия: /terms. Вопросы по оплате: /paysupport.",
+    )
+
+
+@dp.message(Command("terms"))
+async def cmd_terms(message: types.Message):
+    await message.answer(subscriptions.TERMS_TEXT_RU)
+
+
+@dp.message(Command("paysupport"))
+async def cmd_payment_support(message: types.Message):
+    user = message.from_user
+    if user is None:
+        return
+    await asyncio.to_thread(database.set_payment_support_pending, user.id)
+    await message.answer(
+        "Опишите проблему с оплатой следующим сообщением — я передам её поддержке. "
+        "Чтобы отменить обращение, отправьте /cancel."
+    )
+
+
+@dp.message(Command("cancel"))
+async def cmd_cancel(message: types.Message):
+    user = message.from_user
+    if user and await asyncio.to_thread(
+        database.cancel_payment_support_pending, user.id
+    ):
+        await message.answer("Обращение отменено.")
+        return
+    await message.answer("Активных обращений для отмены нет.")
+
+
+@dp.message(Command("reply"))
+async def cmd_support_reply(message: types.Message):
+    admin = message.from_user
+    if admin is None or admin.id not in config.ADMIN_IDS:
+        await message.answer("Эта команда доступна только поддержке.")
+        return
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) != 3 or not parts[1].isdigit():
+        await message.answer("Формат команды: /reply <user_id> <сообщение>")
+        return
+    try:
+        await bot.send_message(int(parts[1]), parts[2])
+    except TelegramAPIError:
+        logger.exception("Could not send support reply to user %s", parts[1])
+        await message.answer("Не удалось отправить ответ пользователю.")
+        return
+    await message.answer("Ответ отправлен.")
+
+
+@dp.pre_checkout_query()
+async def process_pre_checkout_query(query: types.PreCheckoutQuery):
+    valid = await asyncio.to_thread(
+        database.validate_star_invoice,
+        query.from_user.id,
+        query.invoice_payload,
+        query.currency,
+        query.total_amount,
+    )
+    await query.answer(
+        ok=valid,
+        error_message=None if valid else (
+            "Счёт устарел или не соответствует тарифу. "
+            "Вернитесь в Taxi Forecast и запросите новый."
+        ),
+    )
+
+
+@dp.message(F.successful_payment)
+async def process_successful_payment(message: types.Message):
+    payment = message.successful_payment
+    user = message.from_user
+    if payment is None or user is None:
+        return
+    expires_at = payment.subscription_expiration_date
+    if expires_at is None:
+        expires_at = int(time.time()) + subscriptions.SUBSCRIPTION_PERIOD_SECONDS
+        logger.warning(
+            "Stars payment for user %s had no subscription expiration; "
+            "using one 30-day period",
+            user.id,
+        )
+    recorded = await asyncio.to_thread(
+        database.record_star_payment,
+        user.id,
+        payment.invoice_payload,
+        payment.currency,
+        payment.total_amount,
+        payment.telegram_payment_charge_id,
+        expires_at,
+    )
+    if not recorded:
+        logger.error(
+            "Could not apply Stars payment %s for user %s",
+            payment.telegram_payment_charge_id,
+            user.id,
+        )
+        await message.answer(
+            "Платёж получен, но доступ пока не обновился. "
+            "Отправьте /paysupport, и мы проверим оплату."
+        )
+        return
+    await message.answer(
+        "Оплата подтверждена! Подписка Taxi Forecast активна на 30 дней.",
+        reply_markup=get_main_keyboard(),
     )
 
 
 @dp.message()
 async def open_app_hint(message: types.Message):
+    user = message.from_user
+    if user and await asyncio.to_thread(
+        database.consume_payment_support_pending, user.id
+    ):
+        delivered = False
+        for admin_id in config.ADMIN_IDS:
+            try:
+                await bot.copy_message(
+                    chat_id=admin_id,
+                    from_chat_id=message.chat.id,
+                    message_id=message.message_id,
+                )
+                await bot.send_message(
+                    admin_id,
+                    f"Вопрос по оплате от пользователя {user.id} "
+                    f"(@{user.username or 'без username'}).",
+                )
+                delivered = True
+            except TelegramAPIError:
+                logger.exception(
+                    "Could not forward payment support message from user %s",
+                    user.id,
+                )
+        if delivered:
+            await message.answer("Сообщение передано поддержке. Ответим в этом чате.")
+        else:
+            await asyncio.to_thread(database.set_payment_support_pending, user.id)
+            await message.answer(
+                "Не удалось передать сообщение поддержке. Попробуйте ещё раз позже."
+            )
+        return
     await send_app_launcher(message, "Открой Taxi Forecast кнопкой ниже.")
 
 
@@ -128,13 +273,20 @@ async def main():
 
     from mini_app import create_app
 
-    app_runner = web.AppRunner(create_app())
+    app_runner = web.AppRunner(create_app(bot))
     await app_runner.setup()
     site = web.TCPSite(app_runner, "0.0.0.0", int(os.getenv("PORT", "8080")))
     await site.start()
     logger.info("Mini App server started")
 
-    await bot.delete_webhook(drop_pending_updates=True)
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Запустить Taxi Forecast"),
+        BotCommand(command="app", description="Открыть Mini App"),
+        BotCommand(command="help", description="Помощь"),
+        BotCommand(command="terms", description="Условия подписки"),
+        BotCommand(command="paysupport", description="Помощь с оплатой"),
+    ])
+    await bot.delete_webhook(drop_pending_updates=False)
     logger.info("Бот запущен!")
     reminder_task = asyncio.create_task(
         document_reminder_loop(), name="document-reminders"
