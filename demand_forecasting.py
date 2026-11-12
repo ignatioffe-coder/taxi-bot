@@ -4,12 +4,40 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 import config
+from external_factors import poi_scores
 
 TAXI_HISTORY_DAYS = 30
 COURIER_HISTORY_DAYS = 90
 COURIER_RECENT_DAYS = 45
 TAXI_CURRENT_WINDOW = timedelta(hours=2)
 TAXI_MIN_HISTORY_SAMPLES = 3
+
+# Насколько непогода усиливает спрос в баллах (ТЗ, п. 12: у такси и доставки
+# влияние разное). Значение — доля, на которую умножается базовый балл.
+WEATHER_IMPACT_TAXI = 0.12
+WEATHER_IMPACT_COURIER = 0.10
+
+
+def _weather_multiplier(factors: dict, work_type: str) -> tuple[float, str | None]:
+    """Множитель к баллу от погоды и подпись для заметки.
+
+    Без данных о погоде возвращает 1.0 и None, поэтому оценка не меняется.
+    """
+    weather = factors.get("weather") or {}
+    try:
+        impact = float(weather.get("impact") or 0)
+    except (TypeError, ValueError):
+        return 1.0, None
+    if impact <= 0:
+        return 1.0, None
+    share = WEATHER_IMPACT_TAXI if work_type == "taxi" else WEATHER_IMPACT_COURIER
+    label = f"{weather.get('emoji', '')} {weather.get('text', '')}".strip()
+    return 1.0 + share * impact, label or None
+
+
+def _adjusted_score(score: int, multiplier: float) -> int:
+    return max(0, min(100, round(score * multiplier)))
+
 
 
 def _parse_timestamp(value) -> datetime | None:
@@ -33,10 +61,11 @@ def _coefficient_score(value: float) -> int:
     return round(_clamp((value - 0.5) / 4.5 * 100, 0, 100))
 
 
-def _taxi_forecast(inputs: dict, now: datetime) -> dict:
+def _taxi_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
     current_since = now - TAXI_CURRENT_WINDOW
     history_since = now - timedelta(days=TAXI_HISTORY_DAYS)
     valid_districts = set(config.MOSCOW_DISTRICTS)
+    multiplier, weather_label = _weather_multiplier(factors, "taxi")
     recent_by_district = defaultdict(list)
     history_by_district = defaultdict(list)
 
@@ -88,6 +117,8 @@ def _taxi_forecast(inputs: dict, now: datetime) -> dict:
             score = round(current_score * 0.65 + history_score * 0.35)
         else:
             score = current_score if current_score is not None else history_score
+        base_score = score
+        score = _adjusted_score(base_score, multiplier)
 
         unique_reporters = len({row.get("user_id") for row in recent if row.get("user_id")})
         if recent:
@@ -114,6 +145,7 @@ def _taxi_forecast(inputs: dict, now: datetime) -> dict:
         items.append({
             "district": district,
             "score": score,
+            "score_base": base_score,
             "confidence": confidence,
             "trend": trend,
             "sample_count": len(recent) + len(history),
@@ -130,6 +162,11 @@ def _taxi_forecast(inputs: dict, now: datetime) -> dict:
         else "available" if sum(item["sample_count"] for item in items) >= 5
         else "limited"
     )
+    weather_suffix = (
+        f" Погода учтена: {weather_label}."
+        if weather_label
+        else " Погода сейчас недоступна, оценка без неё."
+    )
     return {
         "work_type": "taxi",
         "title": "Сигнал спроса на такси на ближайший час",
@@ -140,7 +177,7 @@ def _taxi_forecast(inputs: dict, now: datetime) -> dict:
             "дню недели и часу за последние 30 дней. Балл 0–100 нормирован "
             "по коэффициенту и не является числом заказов: "
             "данные о машинах-конкурентах, пробках, мероприятиях и расстоянии "
-            "от водителя пока не подключены."
+            "от водителя пока не подключены." + weather_suffix
         ),
         "empty_message": (
             "Пока недостаточно замеров на это время. Добавляй коэффициенты, "
@@ -150,7 +187,62 @@ def _taxi_forecast(inputs: dict, now: datetime) -> dict:
     }
 
 
-def _courier_forecast(inputs: dict, now: datetime) -> dict:
+def _courier_poi_baseline(factors: dict, now: datetime) -> dict | None:
+    """Стартовая оценка районов без личных смен — по плотности заведений.
+
+    Решает холодный старт: у нового пользователя нет истории, но плотность
+    кафе, магазинов и вузов (OpenStreetMap) уже известна.
+    """
+    density = factors.get("poi_density")
+    if not density:
+        # Файл со снимком специально не подхватывается автоматически:
+        # без явно переданных данных поведение должно оставаться прежним.
+        return None
+    scores = poi_scores(density)
+    if not scores:
+        return None
+    multiplier, weather_label = _weather_multiplier(factors, "courier")
+    items = []
+    for district, index in scores.items():
+        base_score = round(index * 100)
+        items.append({
+            "district": district,
+            "score": _adjusted_score(base_score, multiplier),
+            "score_base": base_score,
+            "confidence": 25,
+            "trend": "unknown",
+            "sample_count": 0,
+            "recent_samples": 0,
+            "historical_samples": 0,
+            "poi_index": index,
+            "metric_label": "плотность заведений",
+            "method": "poi_baseline",
+        })
+    items.sort(key=lambda item: (item["score"], item["confidence"]), reverse=True)
+    weather_suffix = (
+        f" Погода учтена: {weather_label}."
+        if weather_label
+        else " Погода сейчас недоступна."
+    )
+    return {
+        "work_type": "courier",
+        "title": "Районы по плотности заведений",
+        "horizon_minutes": 60,
+        "status": "baseline",
+        "method": "poi_baseline",
+        "note": (
+            "Стартовая оценка по плотности кафе, магазинов и вузов "
+            "(OpenStreetMap): кафе и рестораны — основной источник заказов "
+            "доставки. Это ориентир без ваших смен; чем больше смен с районом "
+            "ты сохранишь, тем точнее станет персональная оценка." + weather_suffix
+        ),
+        "empty_message": "Нет данных о плотности заведений.",
+        "items": items[:7],
+    }
+
+
+def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
+    multiplier, weather_label = _weather_multiplier(factors, "courier")
     valid_districts = set(config.MOSCOW_DISTRICTS)
     recent_since = now - timedelta(days=COURIER_RECENT_DAYS)
     history_since = now - timedelta(days=COURIER_HISTORY_DAYS)
@@ -215,6 +307,9 @@ def _courier_forecast(inputs: dict, now: datetime) -> dict:
         if total["hours"] > 0
     }
     if not rates:
+        baseline = _courier_poi_baseline(factors, now)
+        if baseline is not None:
+            return baseline
         return {
             "work_type": "courier",
             "title": "Районы по вашей истории смен",
@@ -266,10 +361,11 @@ def _courier_forecast(inputs: dict, now: datetime) -> dict:
             else "steady" if change is not None
             else "unknown"
         )
-        score = (
+        base_score = (
             50 if maximum_rate == minimum_rate
             else round((rate - minimum_rate) / (maximum_rate - minimum_rate) * 100)
         )
+        score = _adjusted_score(base_score, multiplier)
         confidence = min(
             95,
             20 + min(total["shifts"], 4) * 15 + min(len(total["days"]), 5) * 5,
@@ -277,6 +373,7 @@ def _courier_forecast(inputs: dict, now: datetime) -> dict:
         items.append({
             "district": district,
             "score": score,
+            "score_base": base_score,
             "confidence": confidence,
             "trend": trend,
             "sample_count": total["shifts"],
@@ -291,6 +388,11 @@ def _courier_forecast(inputs: dict, now: datetime) -> dict:
 
     items.sort(key=lambda item: (item["score"], item["confidence"]), reverse=True)
     total_shifts = sum(item["sample_count"] for item in items)
+    weather_suffix = (
+        f" Погода учтена: {weather_label}."
+        if weather_label
+        else " Погода сейчас недоступна."
+    )
     return {
         "work_type": "courier",
         "title": "Районы по вашей истории смен",
@@ -300,22 +402,37 @@ def _courier_forecast(inputs: dict, now: datetime) -> dict:
             "Балл сравнивает районы по вашей истории чистого дохода за час за "
             "последние 90 дней. Динамика сравнивает последние 45 дней с предыдущими "
             "45; это не прогноз числа заказов и не учитывает "
-            "время начала смен, тип транспорта, погоду или конкуренцию."
+            "время начала смен, тип транспорта или конкуренцию." + weather_suffix
         ),
         "empty_message": "Нет сохранённых смен с районом и часами работы.",
         "items": items[:7],
     }
 
 
-def build_forecast(work_type: str, inputs: dict, now: datetime | None = None) -> dict:
-    """Build a transparent, first-stage forecast from available app data."""
+def build_forecast(
+    work_type: str,
+    inputs: dict,
+    now: datetime | None = None,
+    factors: dict | None = None,
+) -> dict:
+    """Build a transparent, first-stage forecast from available app data.
+
+    `factors` — внешние данные (погода, плотность заведений). Если их нет,
+    оценка считается ровно как раньше: без погоды и без стартовой базы.
+    """
     if work_type not in {"taxi", "courier"}:
         raise ValueError("Unsupported work type")
     generated_at = now or config.get_moscow_time()
+    factors = factors or {}
     result = (
-        _taxi_forecast(inputs, generated_at)
+        _taxi_forecast(inputs, generated_at, factors)
         if work_type == "taxi"
-        else _courier_forecast(inputs, generated_at)
+        else _courier_forecast(inputs, generated_at, factors)
     )
     result["generated_at"] = generated_at.isoformat(timespec="minutes")
+    result["weather"] = factors.get("weather")
+    result["factors"] = {
+        "weather": bool(factors.get("weather")),
+        "poi_density": bool(factors.get("poi_density")),
+    }
     return result

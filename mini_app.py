@@ -20,6 +20,7 @@ from aiogram.types import LabeledPrice
 import config
 import database
 import demand_forecasting
+import external_factors
 import heatmap
 import subscriptions
 import weather
@@ -249,7 +250,13 @@ async def dashboard(request: web.Request) -> web.Response:
     if period not in PERIODS:
         raise web.HTTPBadRequest(text="Choose day, week, or month")
 
-    summary, recommendations, market_stats, forecast_inputs = await asyncio.gather(
+    (
+        summary,
+        recommendations,
+        market_stats,
+        forecast_inputs,
+        live_factors,
+    ) = await asyncio.gather(
         asyncio.to_thread(
             database.get_work_summary,
             user["id"],
@@ -263,11 +270,13 @@ async def dashboard(request: web.Request) -> web.Response:
             user["id"],
             work_type,
         ),
+        asyncio.to_thread(external_factors.load_live_factors),
     )
     forecast = await asyncio.to_thread(
         demand_forecasting.build_forecast,
         work_type,
         forecast_inputs,
+        factors=live_factors,
     )
     await asyncio.to_thread(
         database.record_forecast_snapshot,
