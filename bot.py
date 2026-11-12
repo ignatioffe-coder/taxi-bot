@@ -6,6 +6,7 @@ import os
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
@@ -77,6 +78,50 @@ async def open_app_hint(message: types.Message):
     await send_app_launcher(message, "Открой Taxi Forecast кнопкой ниже.")
 
 
+async def document_reminder_loop():
+    while True:
+        try:
+            today = database.get_moscow_time().date()
+            reminders = await asyncio.to_thread(
+                database.get_due_document_reminders, today
+            )
+            for reminder in reminders:
+                days_left = reminder["days_left"]
+                when = "срок действия заканчивается сегодня" if days_left == 0 else (
+                    f"срок действия закончится через {days_left} дн."
+                )
+                expiry = (
+                    f"{reminder['expiry_date'][8:10]}."
+                    f"{reminder['expiry_date'][5:7]}."
+                    f"{reminder['expiry_date'][:4]}"
+                )
+                text = (
+                    f"Напоминание: {reminder['document_label']} — {when} "
+                    f"({expiry}).\n\nПроверь документ и обнови дату в профиле."
+                )
+                try:
+                    await bot.send_message(
+                        reminder["user_id"],
+                        text,
+                        reply_markup=get_main_keyboard(),
+                    )
+                except TelegramAPIError:
+                    logger.exception(
+                        "Could not send document reminder to user %s",
+                        reminder["user_id"],
+                    )
+                    continue
+                await asyncio.to_thread(database.log_document_reminder, reminder)
+                logger.info(
+                    "Sent %s document reminder to user %s",
+                    reminder["document_key"],
+                    reminder["user_id"],
+                )
+        except Exception:
+            logger.exception("Document reminder cycle failed")
+        await asyncio.sleep(60 * 60)
+
+
 async def main():
     database.init_db()
     logger.info("База данных инициализирована")
@@ -91,9 +136,17 @@ async def main():
 
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("Бот запущен!")
+    reminder_task = asyncio.create_task(
+        document_reminder_loop(), name="document-reminders"
+    )
     try:
         await dp.start_polling(bot)
     finally:
+        reminder_task.cancel()
+        try:
+            await reminder_task
+        except asyncio.CancelledError:
+            pass
         await app_runner.cleanup()
 
 

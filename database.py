@@ -2,9 +2,18 @@
 
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Dict
 import config
+
+DOCUMENT_FIELDS = {
+    "medical_book_expiry": ("medical_book", "Медицинская книжка"),
+    "license_expiry": ("license", "Водительское удостоверение"),
+    "osago_expiry": ("osago", "ОСАГО"),
+    "inspection_expiry": ("inspection", "Техосмотр"),
+    "taxi_permit_expiry": ("taxi_permit", "Разрешение такси"),
+}
+REMINDER_OFFSETS = (7, 1, 0)
 
 
 def get_moscow_time():
@@ -73,6 +82,36 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_work_shifts_user_time
         ON work_shifts (user_id, timestamp)
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS driver_profiles (
+            user_id INTEGER PRIMARY KEY,
+            work_type TEXT NOT NULL DEFAULT 'taxi',
+            vehicle_type TEXT NOT NULL DEFAULT '',
+            vehicle_make TEXT NOT NULL DEFAULT '',
+            vehicle_model TEXT NOT NULL DEFAULT '',
+            vehicle_year INTEGER,
+            fuel_type TEXT NOT NULL DEFAULT '',
+            weekly_income_goal REAL NOT NULL DEFAULT 0,
+            reminders_enabled INTEGER NOT NULL DEFAULT 1,
+            medical_book_expiry TEXT,
+            license_expiry TEXT,
+            osago_expiry TEXT,
+            inspection_expiry TEXT,
+            taxi_permit_expiry TEXT,
+            updated_at DATETIME NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS document_reminder_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            document_key TEXT NOT NULL,
+            expiry_date TEXT NOT NULL,
+            days_before INTEGER NOT NULL,
+            sent_at DATETIME NOT NULL,
+            UNIQUE (user_id, document_key, expiry_date, days_before)
+        )
     """)
 
     conn.commit()
@@ -326,3 +365,127 @@ def get_market_district_stats() -> Dict[str, Dict]:
         for row in rows
         if row["district"] in valid_districts
     }
+
+
+def get_driver_profile(user_id: int) -> Dict:
+    """Return a driver's saved profile and document dates."""
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT u.first_name, u.last_name, p.*
+            FROM users AS u
+            LEFT JOIN driver_profiles AS p ON p.user_id = u.user_id
+            WHERE u.user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+    if row is None:
+        return {}
+    profile = dict(row)
+    if profile["user_id"] is None:
+        profile.update({
+            "work_type": "taxi",
+            "vehicle_type": "",
+            "vehicle_make": "",
+            "vehicle_model": "",
+            "vehicle_year": None,
+            "fuel_type": "",
+            "weekly_income_goal": 0,
+            "reminders_enabled": 1,
+            **{field: None for field in DOCUMENT_FIELDS},
+        })
+    profile["reminders_enabled"] = bool(profile["reminders_enabled"])
+    return profile
+
+
+def save_driver_profile(user_id: int, profile: Dict) -> None:
+    """Insert or update a validated driver profile."""
+    fields = (
+        "work_type", "vehicle_type", "vehicle_make", "vehicle_model",
+        "vehicle_year", "fuel_type", "weekly_income_goal", "reminders_enabled",
+        *DOCUMENT_FIELDS,
+    )
+    values = [profile[field] for field in fields]
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        with conn:
+            conn.execute(
+                f"""
+                INSERT INTO driver_profiles (
+                    user_id, {", ".join(fields)}, updated_at
+                )
+                VALUES (?, {", ".join("?" for _ in fields)}, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    {", ".join(f"{field} = excluded.{field}" for field in fields)},
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, *values, get_moscow_time().strftime("%Y-%m-%d %H:%M:%S")),
+            )
+
+
+def get_due_document_reminders(today: date) -> List[Dict]:
+    """Return unsent document reminders due today for enabled driver profiles."""
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        conn.row_factory = sqlite3.Row
+        profiles = conn.execute(
+            """
+            SELECT p.user_id, p.reminders_enabled,
+                   p.medical_book_expiry, p.license_expiry, p.osago_expiry,
+                   p.inspection_expiry, p.taxi_permit_expiry
+            FROM driver_profiles AS p
+            JOIN users AS u ON u.user_id = p.user_id
+            WHERE p.reminders_enabled = 1 AND u.is_active = 1
+            """
+        ).fetchall()
+        sent = {
+            (row["user_id"], row["document_key"], row["expiry_date"], row["days_before"])
+            for row in conn.execute(
+                """
+                SELECT user_id, document_key, expiry_date, days_before
+                FROM document_reminder_log
+                """
+            )
+        }
+
+    reminders = []
+    for profile in profiles:
+        for field, (document_key, label) in DOCUMENT_FIELDS.items():
+            expiry_value = profile[field]
+            if not expiry_value:
+                continue
+            expiry = date.fromisoformat(expiry_value)
+            days_left = (expiry - today).days
+            if days_left not in REMINDER_OFFSETS:
+                continue
+            key = (profile["user_id"], document_key, expiry_value, days_left)
+            if key not in sent:
+                reminders.append({
+                    "user_id": profile["user_id"],
+                    "document_key": document_key,
+                    "document_label": label,
+                    "expiry_date": expiry_value,
+                    "days_left": days_left,
+                })
+    return reminders
+
+
+def log_document_reminder(reminder: Dict) -> bool:
+    """Record a sent reminder once, keyed to its document expiry date."""
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        with conn:
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO document_reminder_log (
+                    user_id, document_key, expiry_date, days_before, sent_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    reminder["user_id"],
+                    reminder["document_key"],
+                    reminder["expiry_date"],
+                    reminder["days_left"],
+                    get_moscow_time().strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            return cursor.rowcount == 1

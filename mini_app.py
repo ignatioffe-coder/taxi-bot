@@ -8,7 +8,7 @@ import logging
 import math
 import sqlite3
 import time
-from datetime import datetime, time as datetime_time, timedelta
+from datetime import date, datetime, time as datetime_time, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl
 
@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 WEATHER_OPTIONS = {"", "Ясно", "Облачно", "Дождь", "Снег", "Туман", "Гроза"}
 WORK_TYPES = {"taxi", "courier"}
+VEHICLE_TYPES = {"", "car", "motorcycle", "bicycle", "scooter", "foot", "other"}
+FUEL_TYPES = {"", "petrol", "diesel", "electric", "hybrid", "other"}
 PERIODS = {"day", "week", "month"}
 AMOUNT_FIELDS = {
     "gross_income",
@@ -248,6 +250,130 @@ async def submit_shift(request: web.Request) -> web.Response:
     return web.json_response({"saved": True, "shift_id": shift_id})
 
 
+def _profile_response(profile: dict) -> dict:
+    fields = (
+        "work_type", "vehicle_type", "vehicle_make", "vehicle_model",
+        "vehicle_year", "fuel_type", "weekly_income_goal", "reminders_enabled",
+        *database.DOCUMENT_FIELDS,
+    )
+    result = {}
+    for field in fields:
+        value = profile.get(field)
+        if field == "reminders_enabled":
+            result[field] = bool(value)
+        elif field == "weekly_income_goal":
+            result[field] = value or 0
+        elif field == "vehicle_year":
+            result[field] = value
+        else:
+            result[field] = value or ""
+    result.update({
+        "first_name": profile.get("first_name") or "",
+        "last_name": profile.get("last_name") or "",
+    })
+    return result
+
+
+async def get_profile(request: web.Request) -> web.Response:
+    user = _authenticated_user(request)
+    await asyncio.to_thread(
+        database.add_user,
+        user["id"],
+        user.get("username", ""),
+        user.get("first_name", ""),
+        user.get("last_name", ""),
+    )
+    profile = await asyncio.to_thread(database.get_driver_profile, user["id"])
+    return web.json_response(_profile_response(profile))
+
+
+async def save_profile(request: web.Request) -> web.Response:
+    user = _authenticated_user(request)
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, web.HTTPException):
+        raise web.HTTPBadRequest(text="Request body must be valid JSON")
+    if not isinstance(payload, dict):
+        raise web.HTTPBadRequest(text="Request body must be a JSON object")
+
+    required_fields = {
+        "work_type", "vehicle_type", "vehicle_make", "vehicle_model",
+        "vehicle_year", "fuel_type", "weekly_income_goal", "reminders_enabled",
+        *database.DOCUMENT_FIELDS,
+    }
+    if set(payload) != required_fields:
+        raise web.HTTPBadRequest(text="Profile fields are incomplete or unsupported")
+    if (
+        not isinstance(payload["work_type"], str)
+        or payload["work_type"] not in WORK_TYPES
+    ):
+        raise web.HTTPBadRequest(text="Choose taxi or courier")
+    if (
+        not isinstance(payload["vehicle_type"], str)
+        or payload["vehicle_type"] not in VEHICLE_TYPES
+    ):
+        raise web.HTTPBadRequest(text="Choose a supported vehicle type")
+    if (
+        not isinstance(payload["fuel_type"], str)
+        or payload["fuel_type"] not in FUEL_TYPES
+    ):
+        raise web.HTTPBadRequest(text="Choose a supported fuel type")
+    if not isinstance(payload["reminders_enabled"], bool):
+        raise web.HTTPBadRequest(text="reminders_enabled must be true or false")
+
+    profile = {
+        "work_type": payload["work_type"],
+        "vehicle_type": payload["vehicle_type"],
+        "fuel_type": payload["fuel_type"],
+        "reminders_enabled": int(payload["reminders_enabled"] is True),
+        "weekly_income_goal": _validated_amount(
+            payload, "weekly_income_goal", maximum=1_000_000
+        ),
+    }
+    for field in ("vehicle_make", "vehicle_model"):
+        value = payload[field]
+        if not isinstance(value, str) or len(value.strip()) > 80:
+            raise web.HTTPBadRequest(text=f"{field} must be a string up to 80 characters")
+        profile[field] = value.strip()
+
+    vehicle_year = payload["vehicle_year"]
+    if vehicle_year in (None, ""):
+        profile["vehicle_year"] = None
+    elif (
+        isinstance(vehicle_year, bool)
+        or not isinstance(vehicle_year, int)
+        or not 1980 <= vehicle_year <= 2100
+    ):
+        raise web.HTTPBadRequest(text="vehicle_year is outside the supported range")
+    else:
+        profile["vehicle_year"] = vehicle_year
+
+    for field in database.DOCUMENT_FIELDS:
+        value = payload[field]
+        if value in (None, ""):
+            profile[field] = None
+            continue
+        if not isinstance(value, str):
+            raise web.HTTPBadRequest(text=f"{field} must be a date or empty")
+        try:
+            parsed_date = date.fromisoformat(value)
+        except ValueError:
+            raise web.HTTPBadRequest(text=f"{field} must use YYYY-MM-DD format")
+        if parsed_date.isoformat() != value:
+            raise web.HTTPBadRequest(text=f"{field} must use YYYY-MM-DD format")
+        profile[field] = value
+
+    await asyncio.to_thread(
+        database.add_user,
+        user["id"],
+        user.get("username", ""),
+        user.get("first_name", ""),
+        user.get("last_name", ""),
+    )
+    await asyncio.to_thread(database.save_driver_profile, user["id"], profile)
+    return web.json_response({"saved": True})
+
+
 async def submit_coefficient(request: web.Request) -> web.Response:
     user = _authenticated_user(request)
     try:
@@ -292,6 +418,8 @@ def create_app() -> web.Application:
     app.router.add_static("/static/", path=STATIC_DIR)
     app.router.add_get("/api/districts", district_catalog)
     app.router.add_get("/api/dashboard", dashboard)
+    app.router.add_get("/api/profile", get_profile)
+    app.router.add_put("/api/profile", save_profile)
     app.router.add_post("/api/coefficients", submit_coefficient)
     app.router.add_post("/api/shifts", submit_shift)
     return app
