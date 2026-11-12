@@ -98,6 +98,16 @@ def _location_multiplier(factors: dict, district: str) -> float:
     return 1.0 + min(0.25, bonus)
 
 
+def _reports_multiplier(factors: dict, district: str) -> float:
+    """Множитель по сообщениям водителей и курьеров (ТЗ, п. 9.2, 10, 14)."""
+    reports = factors.get("reports") or {}
+    try:
+        value = float(reports.get(district, 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    return value if value > 0 else 1.0
+
+
 
 def _parse_timestamp(value) -> datetime | None:
     if isinstance(value, datetime):
@@ -178,7 +188,10 @@ def _taxi_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             score = current_score if current_score is not None else history_score
         base_score = score
         score = _adjusted_score(
-            base_score, multiplier * _location_multiplier(factors, district)
+            base_score,
+            multiplier
+            * _location_multiplier(factors, district)
+            * _reports_multiplier(factors, district),
         )
 
         unique_reporters = len({row.get("user_id") for row in recent if row.get("user_id")})
@@ -235,11 +248,11 @@ def _taxi_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
         "horizon_minutes": 60,
         "status": status,
         "note": (
-            "Оценка построена по свежим сообщениям о коэффициентах и похожим "
-            "дню недели и часу за последние 30 дней. Балл 0–100 нормирован "
-            "по коэффициенту и не является числом заказов: "
-            "данные о машинах-конкурентах, пробках, мероприятиях и расстоянии "
-            "от водителя пока не подключены." + weather_suffix
+            "Оценка учитывает свежие коэффициенты (за 2 часа), похожий день и "
+            "час за последние 30 дней, погоду и сообщения водителей о пробках и "
+            "спросе. Балл 0–100 — сравнительный ориентир, а не число заказов. "
+            "Пока не учитываются реальное число машин на линии и расстояние от "
+            "вашей точки." + weather_suffix
         ),
         "empty_message": (
             "Пока недостаточно замеров на это время. Добавляй коэффициенты, "
@@ -269,7 +282,10 @@ def _baseline_items(
             continue
         base_score = round(index * 100)
         score = _adjusted_score(
-            base_score, multiplier * _location_multiplier(factors, district)
+            base_score,
+            multiplier
+            * _location_multiplier(factors, district)
+            * _reports_multiplier(factors, district),
         )
         items.append({
             "district": district,
@@ -316,7 +332,8 @@ def _courier_poi_baseline(factors: dict, now: datetime) -> dict | None:
             "Стартовая оценка по плотности кафе, магазинов и вузов "
             "(OpenStreetMap): кафе и рестораны — основной источник заказов "
             "доставки. Это ориентир без ваших смен; чем больше смен с районом "
-            "ты сохранишь, тем точнее станет персональная оценка." + weather_suffix
+            "ты сохранишь, тем точнее станет персональная оценка. Учтены погода "
+            "и сообщения курьеров." + weather_suffix
         ),
         "empty_message": "Нет данных о плотности заведений.",
         "items": items[:7],
@@ -448,7 +465,10 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             else round((rate - minimum_rate) / (maximum_rate - minimum_rate) * 100)
         )
         score = _adjusted_score(
-            base_score, multiplier * _location_multiplier(factors, district)
+            base_score,
+            multiplier
+            * _location_multiplier(factors, district)
+            * _reports_multiplier(factors, district),
         )
         confidence = min(
             95,
@@ -508,7 +528,8 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             "Балл сравнивает районы по вашей истории чистого дохода за час за "
             "последние 90 дней. Динамика сравнивает последние 45 дней с предыдущими "
             "45; это не прогноз числа заказов и не учитывает "
-            "время начала смен, тип транспорта или конкуренцию."
+            "время начала смен и тип транспорта. Учтены погода и сообщения "
+            "курьеров об обстановке."
             + weather_suffix + blend_suffix
         ),
         "empty_message": "Нет сохранённых смен с районом и часами работы.",
@@ -544,5 +565,6 @@ def build_forecast(
         "poi_density": bool(factors.get("poi_density")),
         "airports": bool(factors.get("airports")),
         "events": bool(factors.get("events")),
+        "reports": bool(factors.get("reports")),
     }
     return result

@@ -18,6 +18,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.types import LabeledPrice
 
 import config
+import crowd_signals
 import database
 import demand_forecasting
 import external_factors
@@ -256,6 +257,7 @@ async def dashboard(request: web.Request) -> web.Response:
         market_stats,
         forecast_inputs,
         live_factors,
+        report_stats,
     ) = await asyncio.gather(
         asyncio.to_thread(
             database.get_work_summary,
@@ -271,6 +273,14 @@ async def dashboard(request: web.Request) -> web.Response:
             work_type,
         ),
         asyncio.to_thread(external_factors.load_live_factors),
+        asyncio.to_thread(
+            database.get_driver_report_district_stats,
+            work_type,
+        ),
+    )
+    # Сообщения водителей превращаем в множитель к баллу (ТЗ, п. 9.2, 10, 14)
+    live_factors["reports"] = crowd_signals.district_multipliers(
+        report_stats, config.get_moscow_time()
     )
     forecast = await asyncio.to_thread(
         demand_forecasting.build_forecast,
