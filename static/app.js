@@ -75,25 +75,32 @@
     if (!response.ok) throw new Error("Не удалось загрузить список районов.");
     const data = await response.json();
     renderDistricts(data.district_groups);
-    const [centersResponse, mapConfigResponse] = await Promise.all([
-      fetch("/static/district-centers.json"),
-      fetch("/api/map-config"),
-    ]);
-    if (!centersResponse.ok) {
-      $("map-message").textContent = "Не удалось загрузить координаты районов.";
-      return;
+    await loadMapResources();
+  }
+
+  async function loadMapResources() {
+    try {
+      const [centersResponse, mapConfigResponse] = await Promise.all([
+        fetch("/static/district-centers.json"),
+        fetch("/api/map-config"),
+      ]);
+      if (!centersResponse.ok || !mapConfigResponse.ok) {
+        throw new Error("Не удалось загрузить настройки карты.");
+      }
+      const [mapData, mapConfig] = await Promise.all([
+        centersResponse.json(),
+        mapConfigResponse.json(),
+      ]);
+      districtCenters = mapData.districts || {};
+      yandexMapsApiKey = mapConfig.yandex_maps_api_key || "";
+      renderCoefficientMap(districtGroups);
+    } catch (error) {
+      showMapError(
+        "Не удалось загрузить данные карты. Проверь интернет и попробуй снова.",
+        () => loadMapResources().catch(showError),
+      );
+      throw error;
     }
-    if (!mapConfigResponse.ok) {
-      $("map-message").textContent = "Не удалось загрузить настройки карты.";
-      return;
-    }
-    const [mapData, mapConfig] = await Promise.all([
-      centersResponse.json(),
-      mapConfigResponse.json(),
-    ]);
-    districtCenters = mapData.districts || {};
-    yandexMapsApiKey = mapConfig.yandex_maps_api_key || "";
-    renderCoefficientMap(districtGroups);
   }
 
   function setView(view) {
@@ -226,6 +233,21 @@
     return "#7ce0b1";
   }
 
+  function showMapError(text, retryAction = () => renderCoefficientMap(districtGroups)) {
+    $("map-report-count").textContent = "Карта недоступна";
+    const message = $("map-message");
+    message.classList.add("map-error");
+    message.replaceChildren();
+    const explanation = document.createElement("span");
+    explanation.textContent = text;
+    const retry = document.createElement("button");
+    retry.className = "map-retry";
+    retry.type = "button";
+    retry.textContent = "Повторить";
+    retry.addEventListener("click", retryAction, { once: true });
+    message.append(explanation, retry);
+  }
+
   function loadYandexMaps() {
     if (yandexMapsPromise) return yandexMapsPromise;
     const script = document.createElement("script");
@@ -345,18 +367,7 @@
       message.replaceChildren();
       window.requestAnimationFrame(fitCoefficientMapToViewport);
     }).catch(() => {
-      badge.textContent = "Карта недоступна";
-      const message = $("map-message");
-      message.classList.add("map-error");
-      message.replaceChildren();
-      const explanation = document.createElement("span");
-      explanation.textContent = "Не удалось загрузить карту. Проверь интернет, VPN или домен API-ключа Яндекса.";
-      const retry = document.createElement("button");
-      retry.className = "map-retry";
-      retry.type = "button";
-      retry.textContent = "Повторить";
-      retry.addEventListener("click", () => renderCoefficientMap(districtGroups), { once: true });
-      message.append(explanation, retry);
+      showMapError("Не удалось загрузить карту. Проверь интернет, VPN или домен API-ключа Яндекса.");
     });
   }
 
@@ -772,6 +783,7 @@
   }).format(now).toLocaleUpperCase("ru");
   if (hasTelegramAuth) {
     loadProfile().then(loadDashboard).catch(showError);
+    loadMapResources().catch(showError);
   } else {
     const notice = '<p class="empty-note">Telegram не передал данные авторизации. Отправь боту /start и открой Mini App кнопкой под новым сообщением.</p>';
     $("recommendations").innerHTML = notice;
