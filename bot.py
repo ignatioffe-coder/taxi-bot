@@ -267,6 +267,18 @@ async def document_reminder_loop():
         await asyncio.sleep(60 * 60)
 
 
+async def notification_loop():
+    """Рассылка уведомлений о спросе и погоде (ТЗ, п. 16)."""
+    while True:
+        try:
+            sent = await notifications.send_due_notifications(bot)
+            if sent:
+                logger.info("Отправлено уведомлений: %s", sent)
+        except Exception:
+            logger.exception("Notification cycle failed")
+        await asyncio.sleep(60 * 15)
+
+
 async def main():
     database.init_db()
     logger.info("База данных инициализирована")
@@ -291,14 +303,19 @@ async def main():
     reminder_task = asyncio.create_task(
         document_reminder_loop(), name="document-reminders"
     )
+    notification_task = asyncio.create_task(
+        notification_loop(), name="notifications"
+    )
     try:
         await dp.start_polling(bot)
     finally:
         reminder_task.cancel()
-        try:
-            await reminder_task
-        except asyncio.CancelledError:
-            pass
+        notification_task.cancel()
+        for task in (reminder_task, notification_task):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         await app_runner.cleanup()
 
 

@@ -328,6 +328,21 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            text TEXT NOT NULL,
+            sent_at DATETIME NOT NULL,
+            payload TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_notifications_user_kind_time
+        ON notifications (user_id, kind, sent_at)
+    """)
+
     conn.commit()
     conn.close()
 
@@ -1557,6 +1572,78 @@ def save_notification_preferences(user_id: int, preferences: Dict) -> None:
                     {", ".join(f"{field} = excluded.{field}" for field in fields)}
                 """,
                 (user_id, *values),
+            )
+
+
+NOTIFICATION_RECIPIENT_FIELDS = (
+    "demand_changes",
+    "promising_areas",
+    "weather_changes",
+    "city_events",
+    "traffic_events",
+    "personal_recommendations",
+    "financial_reminders",
+)
+
+
+def get_notification_recipients() -> List[Dict]:
+    """Пользователи с профилем и настройками уведомлений (ТЗ, п. 16)."""
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        conn.row_factory = sqlite3.Row
+        with conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO notification_preferences (user_id)
+                SELECT user_id FROM driver_profiles
+                """
+            )
+        rows = conn.execute(
+            f"""
+            SELECT p.user_id AS user_id,
+                   p.work_type AS work_type,
+                   {", ".join(f"n.{field} AS {field}" for field in NOTIFICATION_RECIPIENT_FIELDS)},
+                   n.frequency AS frequency,
+                   n.quiet_start AS quiet_start,
+                   n.quiet_end AS quiet_end
+            FROM driver_profiles p
+            JOIN notification_preferences n ON n.user_id = p.user_id
+            """
+        ).fetchall()
+    recipients = []
+    for row in rows:
+        record = dict(row)
+        for field in NOTIFICATION_RECIPIENT_FIELDS:
+            record[field] = bool(record[field])
+        recipients.append(record)
+    return recipients
+
+
+def get_last_notification_at(user_id: int, kind: str) -> str | None:
+    """Когда пользователю последний раз уходило уведомление этого вида."""
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        row = conn.execute(
+            "SELECT MAX(sent_at) FROM notifications WHERE user_id = ? AND kind = ?",
+            (user_id, kind),
+        ).fetchone()
+    return row[0] if row and row[0] else None
+
+
+def log_notification(
+    user_id: int,
+    kind: str,
+    text: str,
+    sent_at: str,
+    payload: str = "",
+) -> None:
+    """Сохраняет факт отправки — история уведомлений и защита от повторов."""
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO notifications (user_id, kind, text, sent_at, payload)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, kind, text, sent_at, payload),
             )
 
 

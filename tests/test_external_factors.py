@@ -143,6 +143,45 @@ class ForecastFactorTests(unittest.TestCase):
         self.assertEqual(forecast["items"][0]["net_income_per_hour"], 90)
 
 
+class HorizonTests(unittest.TestCase):
+    def setUp(self):
+        self.taxi_inputs = lambda now: {
+            "reports": [
+                {
+                    "district": "Тверской",
+                    "coefficient": 2.0,
+                    "timestamp": (now - timedelta(minutes=15)).isoformat(),
+                    "user_id": 1,
+                }
+            ]
+        }
+
+    def test_item_has_all_three_horizons_and_60_matches_score(self):
+        now = datetime(2026, 1, 7, 10, 30)
+        forecast = build_forecast("taxi", self.taxi_inputs(now), now=now)
+        item = forecast["items"][0]
+        self.assertEqual(set(item["horizons"]), {"30", "60", "120"})
+        self.assertEqual(item["horizons"]["60"], item["score"])
+        self.assertEqual(forecast["horizons_minutes"], [30, 60, 120])
+        for value in item["horizons"].values():
+            self.assertGreaterEqual(value, 0)
+            self.assertLessEqual(value, 100)
+
+    def test_morning_taxi_forecast_grows_towards_rush_hour(self):
+        # 06:30 -> через два часа 08:30, утренний пик в профиле выше
+        now = datetime(2026, 1, 7, 6, 30)
+        item = build_forecast("taxi", self.taxi_inputs(now), now=now)["items"][0]
+        self.assertGreater(item["horizons"]["120"], item["score"])
+
+    def test_courier_baseline_grows_towards_lunch(self):
+        now = datetime(2026, 1, 7, 11, 30)  # через 30 минут — 12:00, обеденный пик
+        forecast = build_forecast(
+            "courier", {"shifts": []}, now=now, factors={"poi_density": DENSITY}
+        )
+        arbat = next(i for i in forecast["items"] if i["district"] == "Арбат")
+        self.assertGreater(arbat["horizons"]["30"], arbat["score"])
+
+
 class LiveFactorsTests(unittest.TestCase):
     def test_live_factors_have_expected_shape(self):
         factors = external_factors.load_live_factors()

@@ -17,6 +17,48 @@ TAXI_MIN_HISTORY_SAMPLES = 3
 WEATHER_IMPACT_TAXI = 0.12
 WEATHER_IMPACT_COURIER = 0.10
 
+# Горизонты прогноза из ТЗ, п. 6.4
+HORIZONS = (30, 60, 120)
+
+# Типичный профиль спроса по часам суток (0..23), нормирован относительно 1.0.
+# Это начальная гипотеза для сравнения горизонтов: она не меняет текущий балл,
+# а показывает, как он обычно смещается к указанному часу.
+# Калибровать по факту наблюдений — ТЗ, п. 9.3.
+TAXI_HOUR_PROFILE = (
+    0.50, 0.40, 0.35, 0.30, 0.30, 0.35, 0.50, 0.85, 1.00, 0.95,
+    0.85, 0.80, 0.85, 0.85, 0.80, 0.80, 0.90, 1.05, 1.00, 0.90,
+    0.80, 0.75, 0.70, 0.60,
+)
+COURIER_HOUR_PROFILE = (
+    0.20, 0.15, 0.10, 0.10, 0.15, 0.30, 0.50, 0.70, 0.80, 0.80,
+    0.90, 1.00, 1.20, 1.15, 0.90, 0.80, 0.85, 1.00, 1.20, 1.15,
+    1.00, 0.80, 0.50, 0.30,
+)
+
+
+def _hour_factor(moment: datetime, work_type: str) -> float:
+    profile = TAXI_HOUR_PROFILE if work_type == "taxi" else COURIER_HOUR_PROFILE
+    return profile[moment.hour % 24]
+
+
+def _horizon_scores(score: int, now: datetime, work_type: str) -> dict[str, int]:
+    """Балл на 30/60/120 минут вперёд.
+
+    Балл `score` — это сигнал на ближайший час, поэтому горизонт 60 совпадает
+    с ним, а 30 и 120 показывают ожидаемый сдвиг по типичному профилю суток.
+    """
+    base = _hour_factor(now, work_type)
+    result: dict[str, int] = {}
+    for minutes in HORIZONS:
+        if minutes == 60:
+            result["60"] = score
+            continue
+        moment = now + timedelta(minutes=minutes)
+        ratio = _hour_factor(moment, work_type) / base if base else 1.0
+        result[str(minutes)] = max(0, min(100, round(score * ratio)))
+    return result
+
+
 
 def _weather_multiplier(factors: dict, work_type: str) -> tuple[float, str | None]:
     """Множитель к баллу от погоды и подпись для заметки.
@@ -154,6 +196,7 @@ def _taxi_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             "current_coefficient": round(current_average, 2) if current_average is not None else None,
             "historical_coefficient": round(history_average, 2) if history_average is not None else None,
             "metric_label": "коэффициент",
+            "horizons": _horizon_scores(score, now, "taxi"),
         })
 
     items.sort(key=lambda item: (item["score"], item["confidence"]), reverse=True)
@@ -205,9 +248,10 @@ def _courier_poi_baseline(factors: dict, now: datetime) -> dict | None:
     items = []
     for district, index in scores.items():
         base_score = round(index * 100)
+        score = _adjusted_score(base_score, multiplier)
         items.append({
             "district": district,
-            "score": _adjusted_score(base_score, multiplier),
+            "score": score,
             "score_base": base_score,
             "confidence": 25,
             "trend": "unknown",
@@ -217,6 +261,7 @@ def _courier_poi_baseline(factors: dict, now: datetime) -> dict | None:
             "poi_index": index,
             "metric_label": "плотность заведений",
             "method": "poi_baseline",
+            "horizons": _horizon_scores(score, now, "courier"),
         })
     items.sort(key=lambda item: (item["score"], item["confidence"]), reverse=True)
     weather_suffix = (
@@ -384,6 +429,7 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
                 round(historical_rate, 2) if historical_rate is not None else None
             ),
             "metric_label": "чистый доход/ч",
+            "horizons": _horizon_scores(score, now, "courier"),
         })
 
     items.sort(key=lambda item: (item["score"], item["confidence"]), reverse=True)
@@ -431,6 +477,7 @@ def build_forecast(
     )
     result["generated_at"] = generated_at.isoformat(timespec="minutes")
     result["weather"] = factors.get("weather")
+    result["horizons_minutes"] = list(HORIZONS)
     result["factors"] = {
         "weather": bool(factors.get("weather")),
         "poi_density": bool(factors.get("poi_density")),
