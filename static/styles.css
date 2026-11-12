@@ -307,6 +307,13 @@ h3 { margin: 0; font-size: 15px; }
 .app-footer { padding: 26px 0 0; color: #68737f; text-align: center; font-size: 9px; }
 .toast { position: fixed; z-index: 30; right: 16px; bottom: calc(18px + env(safe-area-inset-bottom)); left: 16px; max-width: 580px; margin: auto; padding: 12px 14px; border: 1px solid var(--line); border-radius: 13px; background: #303943; color: var(--text); opacity: 0; pointer-events: none; transform: translateY(9px); transition: .2s ease; font-size: 11px; }
 .toast.visible { opacity: 1; transform: translateY(0); }
+.forecast-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 14px; }
+.horizon-switch { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 11px; background: rgba(255,255,255,.03); }
+.horizon-button { padding: 6px 11px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 10px; font-weight: 600; cursor: pointer; transition: .15s ease; }
+.horizon-button.active { background: rgba(255,255,255,.10); color: var(--text); }
+.horizon-button:active { transform: scale(.97); }
+.forecast-chip { padding: 5px 9px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.04); color: var(--muted); font-size: 9px; letter-spacing: .02em; }
+.score-delta { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
 @media (min-width: 560px) {
   .app-shell { padding-top: 30px; }
   .metric-card { padding: 15px; }

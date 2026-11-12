@@ -214,6 +214,8 @@
 
   async function loadCityWeather() {
     const data = await (await api("/api/weather", { cache: "no-store" })).json();
+    // Если прогноз уже показал погоду из Open-Meteo, не перетираем её
+    if (forecastWeatherApplied) return;
     const badge = $("city-weather");
     badge.textContent = data.ok
       ? `${data.text} · wttr.in`
@@ -745,9 +747,35 @@
     if (empty) empty.hidden = visibleGroups > 0;
   }
 
+  let selectedHorizon = 60;
+  let currentForecast = null;
+  let forecastWeatherApplied = false;
+
+  function scoreFor(item, horizon) {
+    const value = item.horizons ? item.horizons[String(horizon)] : undefined;
+    return Number(value === undefined || value === null ? item.score || 0 : value);
+  }
+
+  function updateWeatherBadge(weather) {
+    if (!weather || typeof weather.temperature !== "number") return;
+    const badge = $("city-weather");
+    if (!badge) return;
+    forecastWeatherApplied = true;
+    const parts = [weather.emoji, weather.text, `${Math.round(weather.temperature)} °C`]
+      .filter(Boolean)
+      .join(" ");
+    badge.textContent = `${parts} · Open-Meteo`;
+    badge.classList.remove("unavailable");
+  }
+
   function renderRecommendations(forecast) {
     const container = $("recommendations");
     const items = forecast.items || [];
+    currentForecast = forecast;
+    updateWeatherBadge(forecast.weather);
+    const hasHorizons = items.some((item) => item.horizons);
+    $("horizon-switch").hidden = !hasHorizons;
+    $("forecast-chip").hidden = forecast.method !== "poi_baseline";
     $("forecast-title").textContent = forecast.title || "Перспективные районы";
     $("forecast-eyebrow").textContent = forecast.work_type === "taxi"
       ? "СИГНАЛ НА БЛИЖАЙШИЙ ЧАС"
@@ -762,7 +790,10 @@
       return;
     }
 
-    items.forEach((item, index) => {
+    const ranked = [...items].sort(
+      (a, b) => scoreFor(b, selectedHorizon) - scoreFor(a, selectedHorizon)
+    );
+    ranked.forEach((item, index) => {
       const card = document.createElement("article");
       card.className = "recommendation";
       const rank = document.createElement("span");
@@ -792,23 +823,43 @@
         metric.textContent = item.current_coefficient === null
           ? `История ${item.historical_coefficient}x`
           : `Сейчас ${item.current_coefficient}x`;
+      } else if (item.metric_label === "плотность заведений") {
+        metric.textContent = "плотность кафе и магазинов";
       } else {
         const periodLabel = item.recent_samples ? "Последние 45 дней" : "За 90 дней";
         metric.textContent = `${periodLabel}: ${currency.format(item.net_income_per_hour || 0)}/ч`;
       }
       const track = document.createElement("div");
       track.className = "forecast-score-track";
+      const displayScore = scoreFor(item, selectedHorizon);
       const fill = document.createElement("span");
-      fill.style.width = `${item.score}%`;
+      fill.style.width = `${displayScore}%`;
       track.appendChild(fill);
-      info.append(name, note, metric, track);
+      info.append(name, note, metric);
+      if (item.score_base !== undefined && Number(item.score_base) !== Number(item.score)) {
+        const delta = document.createElement("span");
+        delta.className = "score-delta";
+        delta.textContent = `база ${item.score_base} → ${item.score} с погодой`;
+        info.append(delta);
+      }
+      info.append(track);
       const score = document.createElement("strong");
       score.className = "recommendation-coef";
-      score.textContent = `${item.score}/100`;
+      score.textContent = `${displayScore}/100`;
       card.append(rank, info, score);
       container.appendChild(card);
     });
   }
+
+  $("horizon-switch").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-horizon]");
+    if (!button) return;
+    selectedHorizon = Number(button.dataset.horizon);
+    document.querySelectorAll("#horizon-switch .horizon-button").forEach((el) => {
+      el.classList.toggle("active", el === button);
+    });
+    if (currentForecast) renderRecommendations(currentForecast);
+  });
 
   function renderChart(chart) {
     const container = $("week-chart");

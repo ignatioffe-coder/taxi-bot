@@ -11,6 +11,7 @@
 """
 
 import json
+import math
 import threading
 import time
 from pathlib import Path
@@ -169,9 +170,40 @@ def poi_index(district: str, density: dict | None = None) -> float | None:
     return poi_scores(density).get(district)
 
 
-def load_live_factors() -> dict:
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Расстояние между двумя точками в километрах."""
+    radius = 6371.0
+    d_lat = math.radians(lat2 - lat1)
+    d_lon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(d_lat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(d_lon / 2) ** 2
+    )
+    return 2 * radius * math.asin(math.sqrt(a))
+
+
+def load_live_factors(now=None) -> dict:
     """Факторы для передачи в demand_forecasting.build_forecast."""
+    moment = now or config.get_moscow_time()
+    airport_impacts: dict = {}
+    event_impacts: dict = {}
+    try:
+        # Импорт внутри функции: airports и events сами используют этот модуль
+        import airports
+        import events
+
+        centers = airports.load_centers()
+        if centers:
+            airport_impacts = airports.load_airport_impacts(moment, centers)
+            event_impacts = events.load_event_impacts(moment, centers)
+    except Exception:  # noqa: BLE001 - слой факторов не должен ронять прогноз
+        airport_impacts, event_impacts = {}, {}
+
     return {
         "weather": get_weather(),
         "poi_density": load_poi_density(),
+        "airports": airport_impacts,
+        "events": event_impacts,
     }

@@ -81,6 +81,19 @@ def _adjusted_score(score: int, multiplier: float) -> int:
     return max(0, min(100, round(score * multiplier)))
 
 
+def _location_multiplier(factors: dict, district: str) -> float:
+    """Добавка к баллу района от аэропортов и мероприятий (ТЗ, п. 7.3 и 13)."""
+    airports_map = factors.get("airports") or {}
+    events_map = factors.get("events") or {}
+    try:
+        bonus = float(airports_map.get(district, 0)) + float(events_map.get(district, 0))
+    except (TypeError, ValueError):
+        return 1.0
+    if bonus <= 0:
+        return 1.0
+    return 1.0 + min(0.25, bonus)
+
+
 
 def _parse_timestamp(value) -> datetime | None:
     if isinstance(value, datetime):
@@ -160,7 +173,9 @@ def _taxi_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
         else:
             score = current_score if current_score is not None else history_score
         base_score = score
-        score = _adjusted_score(base_score, multiplier)
+        score = _adjusted_score(
+            base_score, multiplier * _location_multiplier(factors, district)
+        )
 
         unique_reporters = len({row.get("user_id") for row in recent if row.get("user_id")})
         if recent:
@@ -248,7 +263,9 @@ def _courier_poi_baseline(factors: dict, now: datetime) -> dict | None:
     items = []
     for district, index in scores.items():
         base_score = round(index * 100)
-        score = _adjusted_score(base_score, multiplier)
+        score = _adjusted_score(
+            base_score, multiplier * _location_multiplier(factors, district)
+        )
         items.append({
             "district": district,
             "score": score,
@@ -410,7 +427,9 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             50 if maximum_rate == minimum_rate
             else round((rate - minimum_rate) / (maximum_rate - minimum_rate) * 100)
         )
-        score = _adjusted_score(base_score, multiplier)
+        score = _adjusted_score(
+            base_score, multiplier * _location_multiplier(factors, district)
+        )
         confidence = min(
             95,
             20 + min(total["shifts"], 4) * 15 + min(len(total["days"]), 5) * 5,
@@ -481,5 +500,7 @@ def build_forecast(
     result["factors"] = {
         "weather": bool(factors.get("weather")),
         "poi_density": bool(factors.get("poi_density")),
+        "airports": bool(factors.get("airports")),
+        "events": bool(factors.get("events")),
     }
     return result
