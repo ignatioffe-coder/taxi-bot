@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#11151b">
   <title>Taxi Forecast</title>
-  <link rel="stylesheet" href="/static/styles.css?v=5">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/static/styles.css?v=7">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/static/app.js?v=7" defer></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/app.js?v=9" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -31,8 +33,9 @@
 
     <nav class="bottom-nav" aria-label="Разделы приложения">
       <button class="nav-button active" data-view="overview"><span>◫</span>Обзор</button>
-      <button class="nav-button" data-view="districts"><span>⌖</span>Районы</button>
+      <button class="nav-button" data-view="districts"><span>⌖</span>Карта</button>
       <button class="nav-button" data-view="shifts"><span>＋</span>Смена</button>
+      <button class="nav-button" data-view="profile"><span>◉</span>Профиль</button>
     </nav>
 
     <section class="view active" id="view-overview">
@@ -78,7 +81,21 @@
     </section>
 
     <section class="view" id="view-districts">
-      <div class="page-intro"><p class="eyebrow">СПРОС В ГОРОДЕ</p><h2>Районы Москвы</h2><p>132 района в 12 административных округах. Выбери район, чтобы отправить свежий коэффициент.</p></div>
+      <div class="page-intro"><p class="eyebrow">СПРОС В ГОРОДЕ</p><h2>Карта коэффициентов</h2><p>Коэффициенты по сообщениям водителей. Нажми на точку, чтобы посмотреть данные района; серые точки пока без замеров.</p></div>
+      <section class="map-card">
+        <div class="map-heading"><div><p class="eyebrow">МОСКВА · 132 РАЙОНА</p><h3>Ситуация на карте</h3></div><span id="map-report-count" class="map-badge">Загрузка…</span></div>
+        <div id="coefficient-map" role="application" aria-label="Карта коэффициентов по районам Москвы"></div>
+        <div class="map-legend" aria-label="Легенда коэффициентов">
+          <span><i class="legend-dot no-data"></i>Нет данных</span>
+          <span><i class="legend-dot low"></i>&lt;1,3x</span>
+          <span><i class="legend-dot mid-low"></i>1,3–1,5x</span>
+          <span><i class="legend-dot medium"></i>1,6–1,9x</span>
+          <span><i class="legend-dot high"></i>2,0–2,4x</span>
+          <span><i class="legend-dot peak"></i>от 2,5x</span>
+        </div>
+        <p class="map-attribution">Карта © OpenStreetMap contributors · коэффициенты сообщают пользователи</p>
+        <p id="map-message" class="form-message" role="status"></p>
+      </section>
       <label class="search-box"><span>⌕</span><input id="district-search" type="search" placeholder="Найти район или округ"></label>
       <div id="district-groups" class="district-groups"><p class="loading">Загружаем районы…</p></div>
 
@@ -130,6 +147,42 @@
         <div class="section-heading"><div><p class="eyebrow">ЗАПИСИ</p><h2>Смены за период</h2></div></div>
         <div id="shift-history" class="recent-list"></div>
       </section>
+    </section>
+
+    <section class="view" id="view-profile">
+      <div class="page-intro"><p class="eyebrow">ТВОИ ДАННЫЕ</p><h2>Профиль водителя</h2><p>Сохрани информацию о транспорте и сроках документов. Напомним в Telegram за 7 дней, за 1 день и в день окончания.</p></div>
+      <section class="profile-identity"><span class="avatar" id="profile-avatar">В</span><div><p class="eyebrow">АККАУНТ TELEGRAM</p><strong id="profile-name">Водитель</strong></div></section>
+      <form id="profile-form" class="form-card data-form profile-form">
+        <div class="form-heading"><span class="form-icon">◉</span><div><p class="eyebrow">О ТЕБЕ</p><h3>Работа и транспорт</h3></div></div>
+        <label for="profile-work-type">Основной вид работы</label>
+        <select id="profile-work-type" name="work_type"><option value="taxi">Такси</option><option value="courier">Курьер</option></select>
+        <div class="form-row">
+          <div class="field"><label for="vehicle-type">Транспорт</label><select id="vehicle-type" name="vehicle_type"><option value="">Не указывать</option><option value="car">Автомобиль</option><option value="motorcycle">Мотоцикл</option><option value="bicycle">Велосипед</option><option value="scooter">Самокат</option><option value="foot">Пешком</option><option value="other">Другое</option></select></div>
+          <div class="field"><label for="fuel-type">Топливо</label><select id="fuel-type" name="fuel_type"><option value="">Не указывать</option><option value="petrol">Бензин</option><option value="diesel">Дизель</option><option value="electric">Электро</option><option value="hybrid">Гибрид</option><option value="other">Другое</option></select></div>
+        </div>
+        <div class="form-row">
+          <div class="field"><label for="vehicle-make">Марка</label><input id="vehicle-make" name="vehicle_make" type="text" maxlength="80" placeholder="Например, Kia"></div>
+          <div class="field"><label for="vehicle-model">Модель</label><input id="vehicle-model" name="vehicle_model" type="text" maxlength="80" placeholder="Например, Rio"></div>
+        </div>
+        <div class="form-row">
+          <div class="field"><label for="vehicle-year">Год выпуска</label><input id="vehicle-year" name="vehicle_year" type="number" min="1980" max="2100" placeholder="2022"></div>
+          <div class="field"><label for="weekly-income-goal">Цель на неделю, ₽</label><input id="weekly-income-goal" name="weekly_income_goal" type="number" min="0" max="1000000" step="1000" inputmode="decimal" placeholder="Например, 50000"></div>
+        </div>
+
+        <div class="profile-documents">
+          <div class="section-heading"><div><p class="eyebrow">СРОКИ ДЕЙСТВИЯ</p><h3>Документы</h3></div></div>
+          <div id="document-status-list" class="document-status-list"></div>
+          <label for="medical-book-expiry">Медицинская книжка</label><input id="medical-book-expiry" name="medical_book_expiry" type="date">
+          <label for="license-expiry">Водительское удостоверение</label><input id="license-expiry" name="license_expiry" type="date">
+          <label for="osago-expiry">Полис ОСАГО</label><input id="osago-expiry" name="osago_expiry" type="date">
+          <label for="inspection-expiry">Техосмотр</label><input id="inspection-expiry" name="inspection_expiry" type="date">
+          <label for="taxi-permit-expiry">Разрешение такси</label><input id="taxi-permit-expiry" name="taxi_permit_expiry" type="date">
+        </div>
+
+        <label class="reminder-toggle" for="reminders-enabled"><span><strong>Напоминать в Telegram</strong><small>За 7 дней, за 1 день и в день окончания</small></span><input id="reminders-enabled" name="reminders_enabled" type="checkbox" checked></label>
+        <button id="save-profile" class="primary-button" type="submit">Сохранить профиль <span>→</span></button>
+        <p id="profile-message" class="form-message" role="status"></p>
+      </form>
     </section>
 
     <footer class="app-footer">Доходы и расходы видны только тебе</footer>

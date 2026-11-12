@@ -10,6 +10,9 @@
   let workType = "taxi";
   let period = "week";
   let districtGroups = [];
+  let districtCenters = {};
+  let coefficientMap = null;
+  let coefficientMarkers = null;
 
   if (tg) {
     tg.ready();
@@ -65,6 +68,19 @@
     if (!response.ok) throw new Error("Не удалось загрузить список районов.");
     const data = await response.json();
     renderDistricts(data.district_groups);
+    try {
+      const centersResponse = await fetch("/static/district-centers.json");
+      if (!centersResponse.ok) {
+        $("map-message").textContent = "Не удалось загрузить координаты районов.";
+        return;
+      }
+      const mapData = await centersResponse.json();
+      districtCenters = mapData.districts || {};
+      renderCoefficientMap(districtGroups);
+    } catch {
+      $("map-message").textContent = "Не удалось загрузить координаты районов.";
+      return;
+    }
   }
 
   function setView(view) {
@@ -74,14 +90,22 @@
     document.querySelectorAll(".nav-button").forEach((button) => {
       button.classList.toggle("active", button.dataset.view === view);
     });
+    if (view === "districts" && coefficientMap) {
+      window.setTimeout(() => coefficientMap.invalidateSize(), 80);
+    }
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function updateWorkTypeButtons() {
+    document.querySelectorAll("[data-work-type]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.workType === workType);
+    });
+    $("profile-work-type").value = workType;
   }
 
   function setWorkType(value) {
     workType = value;
-    document.querySelectorAll("[data-work-type]").forEach((button) => {
-      button.classList.toggle("active", button.dataset.workType === value);
-    });
+    updateWorkTypeButtons();
     if (hasTelegramAuth) loadDashboard().catch(showError);
   }
 
@@ -165,6 +189,80 @@
       selectedShiftDistrict,
     );
     applyDistrictSearch();
+    renderCoefficientMap(groups);
+  }
+
+  function coefficientColor(value, hasData) {
+    if (!hasData) return "#87939e";
+    if (value >= 2.5) return "#d781ff";
+    if (value >= 2) return "#ff8176";
+    if (value >= 1.6) return "#ffb84c";
+    if (value >= 1.3) return "#f3d16b";
+    return "#7ce0b1";
+  }
+
+  function renderCoefficientMap(groups) {
+    const badge = $("map-report-count");
+    if (!window.L) {
+      badge.textContent = "Карта недоступна";
+      $("map-message").textContent = "Не удалось загрузить библиотеку карты. Проверь подключение к интернету.";
+      return;
+    }
+    if (!Object.keys(districtCenters).length) return;
+
+    if (!coefficientMap) {
+      coefficientMap = window.L.map("coefficient-map", {
+        zoomControl: false,
+        scrollWheelZoom: false,
+      }).setView([55.751, 37.617], 9);
+      window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      }).addTo(coefficientMap);
+      window.L.control.zoom({ position: "topright" }).addTo(coefficientMap);
+      coefficientMarkers = window.L.layerGroup().addTo(coefficientMap);
+    }
+    coefficientMarkers.clearLayers();
+    const districts = groups.flatMap((group) => group.districts);
+    const reportingDistricts = districts.filter((district) => district.records > 0).length;
+    badge.textContent = `${reportingDistricts} из ${districts.length} с данными`;
+
+    districts.forEach((district) => {
+      const center = districtCenters[district.name];
+      if (!center) return;
+      const hasData = district.records > 0;
+      const color = coefficientColor(district.avg_coefficient, hasData);
+      const marker = window.L.circleMarker([center.lat, center.lon], {
+        radius: hasData ? 7 : 5,
+        color,
+        fillColor: color,
+        weight: hasData ? 2 : 1,
+        fillOpacity: hasData ? 0.9 : 0.4,
+      });
+      const popup = document.createElement("div");
+      const title = document.createElement("div");
+      title.className = "map-popup-title";
+      title.textContent = district.name;
+      popup.appendChild(title);
+      if (hasData) {
+        const average = document.createElement("div");
+        average.className = "map-popup-value";
+        average.textContent = `Средний коэффициент: ${Number(district.avg_coefficient).toFixed(1)}x`;
+        const samples = document.createElement("div");
+        samples.textContent = `${district.records} ${plural(district.records, "замер", "замера", "замеров")}`;
+        popup.append(average, samples);
+      } else {
+        const empty = document.createElement("div");
+        empty.textContent = "Пока нет замеров от водителей";
+        popup.appendChild(empty);
+      }
+      marker.bindPopup(popup);
+      marker.addTo(coefficientMarkers);
+    });
+    $("map-message").textContent = "";
+    if (document.querySelector("#view-districts").classList.contains("active")) {
+      window.setTimeout(() => coefficientMap.invalidateSize(), 80);
+    }
   }
 
   function applyDistrictSearch() {
@@ -341,6 +439,76 @@
     $("shift-net-preview").style.color = net >= 0 ? "var(--mint)" : "var(--red)";
   }
 
+  function renderDocumentStatuses(profile) {
+    const container = $("document-status-list");
+    container.replaceChildren();
+    const documents = [
+      ["medical_book_expiry", "Медицинская книжка"],
+      ["license_expiry", "Водительское удостоверение"],
+      ["osago_expiry", "ОСАГО"],
+      ["inspection_expiry", "Техосмотр"],
+      ["taxi_permit_expiry", "Разрешение такси"],
+    ];
+    const dateParts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Moscow",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date());
+    const today = Date.UTC(
+      Number(dateParts.find((part) => part.type === "year").value),
+      Number(dateParts.find((part) => part.type === "month").value) - 1,
+      Number(dateParts.find((part) => part.type === "day").value),
+    );
+
+    documents.forEach(([field, label]) => {
+      const row = document.createElement("div");
+      row.className = "document-status-item";
+      const name = document.createElement("strong");
+      name.textContent = label;
+      const status = document.createElement("span");
+      const expiry = profile[field];
+      if (!expiry) {
+        status.textContent = "Дата не указана";
+      } else {
+        const days = Math.round((Date.parse(`${expiry}T00:00:00Z`) - today) / 86400000);
+        if (days < 0) {
+          row.classList.add("expired");
+          status.textContent = `Просрочен · ${expiry.split("-").reverse().join(".")}`;
+        } else if (days === 0) {
+          row.classList.add("soon");
+          status.textContent = "Истекает сегодня";
+        } else {
+          if (days <= 7) row.classList.add("soon");
+          status.textContent = `${expiry.split("-").reverse().join(".")} · ${plural(days, "день", "дня", "дней")}`;
+        }
+      }
+      row.append(name, status);
+      container.appendChild(row);
+    });
+  }
+
+  async function loadProfile() {
+    const profile = await (await api("/api/profile")).json();
+    const form = $("profile-form");
+    const profileFields = [
+      "work_type", "vehicle_type", "vehicle_make", "vehicle_model", "vehicle_year",
+      "fuel_type", "weekly_income_goal", "medical_book_expiry", "license_expiry",
+      "osago_expiry", "inspection_expiry", "taxi_permit_expiry",
+    ];
+    profileFields.forEach((field) => {
+      form.elements[field].value = profile[field] ?? "";
+    });
+    form.elements.reminders_enabled.checked = profile.reminders_enabled;
+    workType = profile.work_type;
+    updateWorkTypeButtons();
+    const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(" ") || "Водитель";
+    $("profile-name").textContent = fullName;
+    $("profile-avatar").textContent = Array.from(fullName.trim())[0] || "В";
+    renderDocumentStatuses(profile);
+    return profile;
+  }
+
   async function loadDashboard() {
     const query = new URLSearchParams({ work_type: workType, period });
     const data = await (await api(`/api/dashboard?${query}`)).json();
@@ -383,6 +551,9 @@
   document.querySelectorAll("[data-work-type]").forEach((button) => {
     button.addEventListener("click", () => setWorkType(button.dataset.workType));
   });
+  $("profile-work-type").addEventListener("change", (event) => {
+    setWorkType(event.currentTarget.value);
+  });
   document.querySelectorAll(".period-button").forEach((button) => {
     button.addEventListener("click", () => setPeriod(button.dataset.period));
   });
@@ -395,6 +566,46 @@
   });
   $("district-search").addEventListener("input", applyDistrictSearch);
   $("shift-form").addEventListener("input", updateShiftPreview);
+
+  $("profile-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = $("save-profile");
+    button.disabled = true;
+    $("profile-message").textContent = "";
+    const value = (name) => form.elements[name].value;
+    const year = value("vehicle_year");
+    const payload = {
+      work_type: value("work_type"),
+      vehicle_type: value("vehicle_type"),
+      vehicle_make: value("vehicle_make"),
+      vehicle_model: value("vehicle_model"),
+      vehicle_year: year ? Number(year) : null,
+      fuel_type: value("fuel_type"),
+      weekly_income_goal: Number(value("weekly_income_goal") || 0),
+      reminders_enabled: form.elements.reminders_enabled.checked,
+      medical_book_expiry: value("medical_book_expiry"),
+      license_expiry: value("license_expiry"),
+      osago_expiry: value("osago_expiry"),
+      inspection_expiry: value("inspection_expiry"),
+      taxi_permit_expiry: value("taxi_permit_expiry"),
+    };
+    try {
+      await api("/api/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      $("profile-message").textContent = "Профиль сохранён.";
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+      await loadProfile();
+      await loadDashboard();
+    } catch (error) {
+      showError(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   $("coefficient-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -465,7 +676,7 @@
     weekday: "long", day: "numeric", month: "long",
   }).format(now).toLocaleUpperCase("ru");
   if (hasTelegramAuth) {
-    loadDashboard().catch(showError);
+    loadProfile().then(loadDashboard).catch(showError);
   } else {
     const notice = '<p class="empty-note">Telegram не передал данные авторизации. Отправь боту /start и открой Mini App кнопкой под новым сообщением.</p>';
     $("recommendations").innerHTML = notice;

@@ -5,6 +5,7 @@ import os
 import tempfile
 import time
 import unittest
+from datetime import timedelta
 from urllib.parse import urlencode
 
 os.environ.setdefault("BOT_TOKEN", "test-bot-token")
@@ -105,6 +106,92 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/static/app.js")
         self.assertEqual(response.status, 200)
         self.assertIn("Telegram.WebApp", await response.text())
+
+        response = await self.client.get("/static/district-centers.json")
+        self.assertEqual(response.status, 200)
+        map_data = await response.json()
+        self.assertEqual(map_data["license"], "ODbL 1.0")
+        self.assertEqual(len(map_data["districts"]), 132)
+
+    async def test_profile_requires_auth_and_saves_document_dates(self):
+        response = await self.client.get("/api/profile")
+        self.assertEqual(response.status, 401)
+
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        response = await self.client.get("/api/profile", headers=headers)
+        self.assertEqual(response.status, 200)
+        profile = await response.json()
+        self.assertEqual(profile["work_type"], "taxi")
+        self.assertTrue(profile["reminders_enabled"])
+
+        import database
+
+        today = database.get_moscow_time().date()
+        expiry_week = (today + timedelta(days=7)).isoformat()
+        expiry_tomorrow = (today + timedelta(days=1)).isoformat()
+        payload = {
+            "work_type": "courier",
+            "vehicle_type": "bicycle",
+            "vehicle_make": "Test",
+            "vehicle_model": "Bike",
+            "vehicle_year": None,
+            "fuel_type": "",
+            "weekly_income_goal": 45000,
+            "reminders_enabled": True,
+            "medical_book_expiry": expiry_week,
+            "license_expiry": expiry_tomorrow,
+            "osago_expiry": today.isoformat(),
+            "inspection_expiry": "",
+            "taxi_permit_expiry": "",
+        }
+        response = await self.client.put(
+            "/api/profile", headers=headers, json=payload
+        )
+        self.assertEqual(response.status, 200)
+
+        response = await self.client.get("/api/profile", headers=headers)
+        saved = await response.json()
+        self.assertEqual(saved["work_type"], "courier")
+        self.assertEqual(saved["medical_book_expiry"], expiry_week)
+        self.assertEqual(saved["weekly_income_goal"], 45000)
+
+        due = database.get_due_document_reminders(today)
+        self.assertEqual({reminder["days_left"] for reminder in due}, {0, 1, 7})
+        self.assertEqual(
+            {reminder["document_key"] for reminder in due},
+            {"medical_book", "license", "osago"},
+        )
+        for reminder in due:
+            self.assertTrue(database.log_document_reminder(reminder))
+        self.assertEqual(database.get_due_document_reminders(today), [])
+
+    async def test_profile_rejects_invalid_document_dates_and_flags(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        payload = {
+            "work_type": "taxi",
+            "vehicle_type": "",
+            "vehicle_make": "",
+            "vehicle_model": "",
+            "vehicle_year": None,
+            "fuel_type": "",
+            "weekly_income_goal": 0,
+            "reminders_enabled": True,
+            "medical_book_expiry": "not-a-date",
+            "license_expiry": "",
+            "osago_expiry": "",
+            "inspection_expiry": "",
+            "taxi_permit_expiry": "",
+        }
+        response = await self.client.put(
+            "/api/profile", headers=headers, json=payload
+        )
+        self.assertEqual(response.status, 400)
+        payload["medical_book_expiry"] = ""
+        payload["reminders_enabled"] = 1
+        response = await self.client.put(
+            "/api/profile", headers=headers, json=payload
+        )
+        self.assertEqual(response.status, 400)
 
     async def test_submission_validates_district_and_saves_for_verified_user(self):
         headers = {"X-Telegram-Init-Data": self.init_data}
