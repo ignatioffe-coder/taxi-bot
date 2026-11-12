@@ -141,7 +141,10 @@ def _build_district_groups(market_stats: dict) -> list[dict]:
 
 async def district_catalog(_request: web.Request) -> web.Response:
     market_stats = await asyncio.to_thread(database.get_market_district_stats)
-    return web.json_response({"district_groups": _build_district_groups(market_stats)})
+    return web.json_response(
+        {"district_groups": _build_district_groups(market_stats)},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 async def map_config(_request: web.Request) -> web.Response:

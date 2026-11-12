@@ -2,9 +2,11 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from datetime import timedelta
 from urllib.parse import urlencode
 
@@ -90,6 +92,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_district_catalog_is_public(self):
         response = await self.client.get("/api/districts")
         self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
         catalog = await response.json()
         self.assertEqual(len(catalog["district_groups"]), 12)
         self.assertEqual(
@@ -115,6 +118,37 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         map_data = await response.json()
         self.assertEqual(map_data["license"], "ODbL 1.0")
         self.assertEqual(len(map_data["districts"]), 132)
+
+        response = await self.client.get("/static/district-boundaries.json")
+        self.assertEqual(response.status, 200)
+        boundaries = await response.json()
+        self.assertEqual(boundaries["license"], "ODbL 1.0")
+        self.assertEqual(set(boundaries["districts"]), set(config.MOSCOW_DISTRICTS))
+        self.assertTrue(all(
+            geometry["type"] in {"Polygon", "MultiPolygon"}
+            for geometry in boundaries["districts"].values()
+        ))
+
+    async def test_market_coefficients_expire_after_two_hours_but_remain_in_history(self):
+        import database
+
+        district = config.MOSCOW_DISTRICTS[0]
+        expired_at = config.moscow_time_str(timedelta(hours=-2, seconds=-1))
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                """
+                INSERT INTO coefficients (user_id, district, coefficient, timestamp)
+                VALUES (?, ?, ?, ?)
+                """,
+                (987654, district, 4.5, expired_at),
+            )
+            conn.commit()
+        self.assertTrue(database.add_coefficient(123456, "driver", district, 1.7))
+
+        stats = database.get_market_district_stats()[district]
+        self.assertEqual(stats["records"], 1)
+        self.assertEqual(stats["avg_coefficient"], 1.7)
+        self.assertEqual(len(database.get_stats_by_district(district)), 2)
 
     async def test_yandex_maps_config_is_public_for_browser_loader(self):
         previous_api_key = config.YANDEX_MAPS_API_KEY
