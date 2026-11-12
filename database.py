@@ -1200,6 +1200,14 @@ def get_admin_summary(now: int | None = None) -> Dict:
         "active_reports": int(reports),
         "active_subscriptions": int(subscriptions_count),
         "forecast_quality": forecast_quality,
+        "forecast_quality_by_district": {
+            "taxi": get_forecast_quality_by_district("taxi"),
+            "courier": get_forecast_quality_by_district("courier"),
+        },
+        "district_coverage": {
+            "taxi": get_district_coverage("taxi"),
+            "courier": get_district_coverage("courier"),
+        },
     }
 
 
@@ -1447,6 +1455,77 @@ def get_forecast_quality_summary() -> Dict[str, Dict]:
             ),
         })
     return result
+
+
+def get_forecast_quality_by_district(
+    work_type: str, limit: int = 8
+) -> List[Dict]:
+    """Худшие по точности районы — где модель ошибается сильнее всего (ТЗ, п. 19)."""
+    if work_type not in {"taxi", "courier"}:
+        raise ValueError("Unsupported work type")
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT e.district AS district,
+                   COUNT(*) AS evaluated,
+                   AVG(e.absolute_error) AS mean_absolute_error,
+                   MAX(e.evaluated_at) AS last_evaluated_at
+            FROM forecast_evaluations AS e
+            JOIN forecast_runs AS r ON r.id = e.run_id
+            WHERE r.work_type = ? AND e.status = 'evaluated'
+            GROUP BY e.district
+            ORDER BY mean_absolute_error DESC
+            LIMIT ?
+            """,
+            (work_type, int(limit)),
+        ).fetchall()
+    return [
+        {
+            "district": row["district"],
+            "evaluated": int(row["evaluated"] or 0),
+            "mean_absolute_error": (
+                round(float(row["mean_absolute_error"]), 2)
+                if row["mean_absolute_error"] is not None else None
+            ),
+            "last_evaluated_at": row["last_evaluated_at"],
+        }
+        for row in rows
+    ]
+
+
+def get_district_coverage(work_type: str, now: datetime | None = None) -> Dict:
+    """Сколько районов вообще имеют данные для прогноза (ТЗ, п. 19)."""
+    if work_type not in {"taxi", "courier"}:
+        raise ValueError("Unsupported work type")
+    current_time = now or get_moscow_time()
+    total = len(config.MOSCOW_DISTRICTS)
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        if work_type == "taxi":
+            since = (current_time - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+            covered = conn.execute(
+                """
+                SELECT COUNT(DISTINCT district) FROM coefficients
+                WHERE timestamp >= ?
+                """,
+                (since,),
+            ).fetchone()[0]
+        else:
+            since = (current_time - timedelta(days=90)).strftime("%Y-%m-%d %H:%M:%S")
+            covered = conn.execute(
+                """
+                SELECT COUNT(DISTINCT district) FROM work_shifts
+                WHERE work_type = 'courier' AND district IS NOT NULL
+                  AND district <> '' AND hours_worked > 0 AND timestamp >= ?
+                """,
+                (since,),
+            ).fetchone()[0]
+    covered = int(covered or 0)
+    return {
+        "covered": covered,
+        "total": total,
+        "share": round(covered / total * 100, 1) if total else 0.0,
+    }
 
 
 def get_demand_forecast_inputs(

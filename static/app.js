@@ -286,6 +286,41 @@
       quality.appendChild(row);
     });
 
+    const coverage = summary.district_coverage || {};
+    const worst = summary.forecast_quality_by_district || {};
+    ["taxi", "courier"].forEach((type) => {
+      const label = type === "taxi" ? "Такси" : "Доставка";
+      const cover = coverage[type];
+      if (cover) {
+        const row = document.createElement("div");
+        row.className = "admin-quality-row";
+        const title = document.createElement("span");
+        title.textContent = `${label} · покрытие районов`;
+        const value = document.createElement("strong");
+        value.textContent = `${cover.covered} из ${cover.total} (${cover.share}%)`;
+        row.append(title, value);
+        quality.appendChild(row);
+      }
+      const rows = worst[type] || [];
+      if (!rows.length) return;
+      const block = document.createElement("div");
+      block.className = "admin-quality-districts";
+      const heading = document.createElement("p");
+      heading.className = "eyebrow admin-reports-label";
+      heading.textContent = `${label.toUpperCase()} · ГДЕ ОШИБАЕМСЯ СИЛЬНЕЕ`;
+      block.appendChild(heading);
+      rows.slice(0, 5).forEach((item) => {
+        const line = document.createElement("p");
+        line.className = "admin-quality-line";
+        const error = type === "taxi"
+          ? `${item.mean_absolute_error}x`
+          : `${currency.format(item.mean_absolute_error)}/ч`;
+        line.textContent = `${item.district} — ${error} · ${item.evaluated} проверок`;
+        block.appendChild(line);
+      });
+      quality.appendChild(block);
+    });
+
     const reportsContainer = $("admin-reports");
     reportsContainer.replaceChildren();
     if (!reports.length) {

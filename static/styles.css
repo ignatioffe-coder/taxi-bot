@@ -320,3 +320,5 @@ h3 { margin: 0; font-size: 15px; }
   .recommendations { grid-template-columns: 1fr 1fr; }
   #coefficient-map { height: 390px; }
 }
+.admin-quality-districts { margin-top: 10px; }
+.admin-quality-line { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
