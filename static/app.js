@@ -816,7 +816,11 @@
         steady: "доход/ч стабилен",
         unknown: "недостаточно истории для динамики",
       };
-      note.textContent = `${item.sample_count} наблюдений · уверенность ${item.confidence}% · ${trendLabels[item.trend] || trendLabels.unknown}`;
+      if (item.method === "poi_baseline") {
+        note.textContent = `стартовая оценка по заведениям · уверенность ${item.confidence}%`;
+      } else {
+        note.textContent = `${item.sample_count} наблюдений · уверенность ${item.confidence}% · ${trendLabels[item.trend] || trendLabels.unknown}`;
+      }
       const metric = document.createElement("span");
       metric.className = "forecast-metric";
       if (item.current_coefficient !== undefined) {

@@ -142,6 +142,49 @@ class ForecastFactorTests(unittest.TestCase):
         self.assertNotEqual(forecast.get("method"), "poi_baseline")
         self.assertEqual(forecast["items"][0]["net_income_per_hour"], 90)
 
+    def test_single_shift_is_blended_with_baseline(self):
+        shifts = [{
+            "district": "Арбат",
+            "gross_income": 900,
+            "hours_worked": 10,
+            "timestamp": (self.now - timedelta(days=1)).isoformat(),
+        }]
+        forecast = build_forecast(
+            "courier",
+            {"shifts": shifts},
+            now=self.now,
+            factors={"poi_density": DENSITY},
+        )
+        # Первым идёт район из личной истории, остальные — стартовая оценка:
+        # одна смена не должна скрывать остальные районы
+        self.assertGreater(len(forecast["items"]), 1)
+        self.assertEqual(forecast["items"][0]["district"], "Арбат")
+        self.assertNotEqual(forecast["items"][0].get("method"), "poi_baseline")
+        self.assertTrue(any(i.get("method") == "poi_baseline" for i in forecast["items"]))
+        self.assertIn("стартовая оценка", forecast["note"])
+
+    def test_rich_history_does_not_need_baseline(self):
+        districts = list(config.MOSCOW_DISTRICTS)[:6]
+        shifts = [
+            {
+                "district": district,
+                "gross_income": 600,
+                "hours_worked": 10,
+                "timestamp": (self.now - timedelta(days=1)).isoformat(),
+            }
+            for district in districts
+        ]
+        forecast = build_forecast(
+            "courier",
+            {"shifts": shifts},
+            now=self.now,
+            factors={"poi_density": DENSITY},
+        )
+        self.assertEqual(len(forecast["items"]), 6)
+        self.assertFalse(
+            any(i.get("method") == "poi_baseline" for i in forecast["items"])
+        )
+
 
 class HorizonTests(unittest.TestCase):
     def setUp(self):

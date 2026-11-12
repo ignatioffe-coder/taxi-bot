@@ -168,9 +168,20 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             headers=headers,
         )
         courier_forecast = (await courier_response.json())["forecast"]
-        self.assertEqual(len(courier_forecast["items"]), 1)
-        self.assertEqual(courier_forecast["items"][0]["district"], district)
-        self.assertEqual(courier_forecast["items"][0]["net_income_per_hour"], 90)
+        # Личных районов ровно один — смена второго пользователя не должна
+        # попасть в расчёт. Остальные пункты — публичная стартовая оценка
+        # по плотности заведений, она добавляется намеренно.
+        personal = [
+            item for item in courier_forecast["items"]
+            if item.get("method") != "poi_baseline"
+        ]
+        self.assertEqual(len(personal), 1)
+        self.assertEqual(personal[0]["district"], district)
+        self.assertEqual(personal[0]["net_income_per_hour"], 90)
+        self.assertNotIn(
+            500,
+            [item.get("net_income_per_hour") for item in courier_forecast["items"]],
+        )
 
     async def test_driver_reports_expire_and_are_rate_limited(self):
         headers = {"X-Telegram-Init-Data": self.init_data}

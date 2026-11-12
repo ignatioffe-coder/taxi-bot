@@ -12,6 +12,10 @@ COURIER_RECENT_DAYS = 45
 TAXI_CURRENT_WINDOW = timedelta(hours=2)
 TAXI_MIN_HISTORY_SAMPLES = 3
 
+# Если личной истории мало, список дополняется стартовой оценкой по заведениям:
+# одна-две смены не должны скрывать остальные районы.
+BLEND_MIN_DISTRICTS = 5
+
 # Насколько непогода усиливает спрос в баллах (ТЗ, п. 12: у такси и доставки
 # влияние разное). Значение — доля, на которую умножается базовый балл.
 WEATHER_IMPACT_TAXI = 0.12
@@ -245,23 +249,24 @@ def _taxi_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
     }
 
 
-def _courier_poi_baseline(factors: dict, now: datetime) -> dict | None:
-    """Стартовая оценка районов без личных смен — по плотности заведений.
-
-    Решает холодный старт: у нового пользователя нет истории, но плотность
-    кафе, магазинов и вузов (OpenStreetMap) уже известна.
-    """
+def _baseline_items(
+    factors: dict, now: datetime, skip: set[str] | None = None
+) -> list[dict]:
+    """Пункты стартовой оценки по плотности заведений (OpenStreetMap)."""
     density = factors.get("poi_density")
     if not density:
-        # Файл со снимком специально не подхватывается автоматически:
+        # Снимок с диска специально не подхватывается автоматически:
         # без явно переданных данных поведение должно оставаться прежним.
-        return None
+        return []
     scores = poi_scores(density)
     if not scores:
-        return None
-    multiplier, weather_label = _weather_multiplier(factors, "courier")
+        return []
+    excluded = skip or set()
+    multiplier, _ = _weather_multiplier(factors, "courier")
     items = []
     for district, index in scores.items():
+        if district in excluded:
+            continue
         base_score = round(index * 100)
         score = _adjusted_score(
             base_score, multiplier * _location_multiplier(factors, district)
@@ -281,6 +286,21 @@ def _courier_poi_baseline(factors: dict, now: datetime) -> dict | None:
             "horizons": _horizon_scores(score, now, "courier"),
         })
     items.sort(key=lambda item: (item["score"], item["confidence"]), reverse=True)
+    return items
+
+
+def _courier_poi_baseline(factors: dict, now: datetime) -> dict | None:
+    """Стартовая оценка районов без личных смен — по плотности заведений.
+
+    Решает холодный старт: у нового пользователя нет истории, но плотность
+    кафе, магазинов и вузов (OpenStreetMap) уже известна.
+    """
+    if not factors.get("poi_density"):
+        return None
+    items = _baseline_items(factors, now)
+    if not items:
+        return None
+    _, weather_label = _weather_multiplier(factors, "courier")
     weather_suffix = (
         f" Погода учтена: {weather_label}."
         if weather_label
@@ -451,23 +471,45 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             "horizons": _horizon_scores(score, now, "courier"),
         })
 
-    items.sort(key=lambda item: (item["score"], item["confidence"]), reverse=True)
+    # Одна-две смены не должны скрывать остальные районы: дополняем список
+    # стартовой оценкой по плотности заведений (ТЗ, п. 8.2).
+    if len(items) < BLEND_MIN_DISTRICTS:
+        known = {item["district"] for item in items}
+        items.extend(_baseline_items(factors, now, skip=known))
+    items.sort(
+        key=lambda item: (
+            item.get("method") == "poi_baseline",
+            -item["score"],
+            -item["confidence"],
+        )
+    )
     total_shifts = sum(item["sample_count"] for item in items)
+    blend_suffix = (
+        " Районы без ваших смен отмечены как стартовая оценка по заведениям."
+        if any(item.get("method") == "poi_baseline" for item in items)
+        else ""
+    )
     weather_suffix = (
         f" Погода учтена: {weather_label}."
         if weather_label
         else " Погода сейчас недоступна."
     )
+    blended = any(item.get("method") == "poi_baseline" for item in items)
     return {
         "work_type": "courier",
-        "title": "Районы по вашей истории смен",
+        "title": (
+            "Ваши районы и стартовая оценка"
+            if blended
+            else "Районы по вашей истории смен"
+        ),
         "horizon_minutes": None,
         "status": "available" if total_shifts >= 3 else "limited",
         "note": (
             "Балл сравнивает районы по вашей истории чистого дохода за час за "
             "последние 90 дней. Динамика сравнивает последние 45 дней с предыдущими "
             "45; это не прогноз числа заказов и не учитывает "
-            "время начала смен, тип транспорта или конкуренцию." + weather_suffix
+            "время начала смен, тип транспорта или конкуренцию."
+            + weather_suffix + blend_suffix
         ),
         "empty_message": "Нет сохранённых смен с районом и часами работы.",
         "items": items[:7],
