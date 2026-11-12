@@ -21,6 +21,11 @@
     tg.expand();
     if (tg.setHeaderColor) tg.setHeaderColor("#11151b");
     if (tg.setBackgroundColor) tg.setBackgroundColor("#11151b");
+    if (tg.onEvent) {
+      tg.onEvent("viewportChanged", () => {
+        window.requestAnimationFrame(fitCoefficientMapToViewport);
+      });
+    }
   }
   const headers = hasTelegramAuth
     ? { "X-Telegram-Init-Data": tg.initData }
@@ -98,10 +103,22 @@
     document.querySelectorAll(".nav-button").forEach((button) => {
       button.classList.toggle("active", button.dataset.view === view);
     });
-    if (view === "districts" && coefficientMap) {
-      window.setTimeout(() => coefficientMap.container.fitToViewport(), 80);
+    if (view === "districts") {
+      window.requestAnimationFrame(() => {
+        renderCoefficientMap(districtGroups);
+        window.setTimeout(fitCoefficientMapToViewport, 250);
+      });
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function fitCoefficientMapToViewport() {
+    if (
+      coefficientMap
+      && document.querySelector("#view-districts").classList.contains("active")
+    ) {
+      coefficientMap.container.fitToViewport();
+    }
   }
 
   function updateWorkTypeButtons() {
@@ -217,17 +234,30 @@
     url.searchParams.set("lang", "ru_RU");
     script.src = url.toString();
     yandexMapsPromise = new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        script.remove();
+        reject(new Error("Timed out loading Yandex Maps API"));
+      }, 15000);
+      const fail = (error) => {
+        window.clearTimeout(timeoutId);
+        script.remove();
+        reject(error);
+      };
       script.addEventListener("load", () => {
         if (!window.ymaps) {
-          reject(new Error("Yandex Maps API did not initialize"));
+          fail(new Error("Yandex Maps API did not initialize"));
           return;
         }
-        window.ymaps.ready(() => resolve(window.ymaps));
+        window.ymaps.ready(() => {
+          window.clearTimeout(timeoutId);
+          resolve(window.ymaps);
+        });
       }, { once: true });
-      script.addEventListener("error", () => {
-        script.remove();
-        reject(new Error("Could not load Yandex Maps API"));
-      }, { once: true });
+      script.addEventListener(
+        "error",
+        () => fail(new Error("Could not load Yandex Maps API")),
+        { once: true },
+      );
       document.head.appendChild(script);
     }).catch((error) => {
       yandexMapsPromise = null;
@@ -244,13 +274,20 @@
       $("map-message").textContent = "Добавь YANDEX_MAPS_API_KEY в переменные окружения и ограничь ключ доменом Mini App.";
       return;
     }
+    if (!document.querySelector("#view-districts").classList.contains("active")) {
+      return;
+    }
     if (!Object.keys(districtCenters).length) return;
 
     const districts = groups.flatMap((group) => group.districts);
     const reportingDistricts = districts.filter((district) => district.records > 0).length;
-    badge.textContent = `${reportingDistricts} из ${districts.length} с данными`;
+    badge.textContent = "Загружаем карту…";
+    $("map-message").textContent = "";
 
     loadYandexMaps().then((ymaps) => {
+      if (!document.querySelector("#view-districts").classList.contains("active")) {
+        return;
+      }
       if (!coefficientMap) {
         coefficientMap = new ymaps.Map("coefficient-map", {
           center: [55.751, 37.617],
@@ -302,13 +339,24 @@
       if (bounds[0].length) {
         coefficientMap.setBounds(bounds, { checkZoomRange: true, zoomMargin: 20 });
       }
-      $("map-message").textContent = "";
-      if (document.querySelector("#view-districts").classList.contains("active")) {
-        window.setTimeout(() => coefficientMap.container.fitToViewport(), 80);
-      }
+      badge.textContent = `${reportingDistricts} из ${districts.length} с данными`;
+      const message = $("map-message");
+      message.classList.remove("map-error");
+      message.replaceChildren();
+      window.requestAnimationFrame(fitCoefficientMapToViewport);
     }).catch(() => {
       badge.textContent = "Карта недоступна";
-      $("map-message").textContent = "Не удалось загрузить Яндекс.Карты. Проверь API-ключ и разрешённый домен в кабинете Яндекса.";
+      const message = $("map-message");
+      message.classList.add("map-error");
+      message.replaceChildren();
+      const explanation = document.createElement("span");
+      explanation.textContent = "Не удалось загрузить карту. Проверь интернет, VPN или домен API-ключа Яндекса.";
+      const retry = document.createElement("button");
+      retry.className = "map-retry";
+      retry.type = "button";
+      retry.textContent = "Повторить";
+      retry.addEventListener("click", () => renderCoefficientMap(districtGroups), { once: true });
+      message.append(explanation, retry);
     });
   }
 
