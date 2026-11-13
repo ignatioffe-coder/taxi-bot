@@ -88,8 +88,8 @@
       title.textContent = "Пробный период закончился";
       status.textContent = `Бесплатный период завершился ${new Date(access.trial_expires_at * 1000).toLocaleDateString("ru-RU")}. Оформи подписку, чтобы продолжить.`;
     } else {
-      title.textContent = "Подписка Taxi Forecast";
-      status.textContent = "После 7 дней бесплатно оформи подписку, чтобы пользоваться Taxi Forecast.";
+      title.textContent = "Подписка MOVENTA";
+      status.textContent = "После 7 дней бесплатно оформи подписку, чтобы пользоваться MOVENTA.";
     }
     $("subscribe-button-label").textContent =
       access.status === "trial" ? "Оплатить сейчас" : "Оплатить подписку";
@@ -1677,7 +1677,7 @@
         if (!profile.onboarding_complete) {
           onboardingForm.hidden = false;
           $("onboarding-title").textContent = "Расскажи о себе";
-          $("onboarding-intro").textContent = "Заполни профиль один раз, чтобы открыть Taxi Forecast.";
+          $("onboarding-intro").textContent = "Заполни профиль один раз, чтобы открыть MOVENTA.";
           $("onboarding-message").textContent = "";
           $("onboarding-name").focus();
           return;

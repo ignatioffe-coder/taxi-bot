@@ -104,7 +104,7 @@ def build_demand_message(work_type: str, forecast: dict) -> str | None:
             lines.append(f"• {district} — {score} (через 30 мин: {int(horizon)})")
         else:
             lines.append(f"• {district} — {score}")
-    lines.append("Открой Taxi Forecast, чтобы увидеть карту.")
+    lines.append("Открой MOVENTA, чтобы увидеть карту.")
     return "\n".join(lines)
 
 

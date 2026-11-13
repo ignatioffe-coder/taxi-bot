@@ -112,7 +112,7 @@ async def _onboarded_user(request: web.Request) -> dict:
         user.get("last_name", ""),
     )
     if not await asyncio.to_thread(database.is_user_onboarded, user["id"]):
-        raise web.HTTPForbidden(text="Complete your profile before using Taxi Forecast")
+        raise web.HTTPForbidden(text="Complete your profile before using MOVENTA")
     access = await asyncio.to_thread(database.get_subscription_access, user["id"])
     if not access["active"]:
         raise web.HTTPPaymentRequired(text="A current subscription is required")
@@ -592,9 +592,9 @@ async def create_subscription_invoice(request: web.Request) -> web.Response:
     invoice_payload = subscriptions.create_invoice_payload(user["id"])
     try:
         invoice_url = await payment_bot.create_invoice_link(
-            title="Taxi Forecast — 30 дней",
+            title="MOVENTA — 30 дней",
             description=(
-                f"Доступ ко всем функциям Taxi Forecast на 30 дней "
+                f"Доступ ко всем функциям MOVENTA на 30 дней "
                 f"за {subscriptions.MONTHLY_PRICE_STARS} ⭐. "
                 "Автопродление — каждые 30 дней."
             ),

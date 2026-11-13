@@ -10,7 +10,7 @@ PREMIUM_BOT_URL = "https://t.me/PremiumBot"
 INVOICE_PAYLOAD_PREFIX = "taxi_forecast:monthly"
 
 TERMS_TEXT_RU = (
-    "Условия Taxi Forecast\n\n"
+    "Условия MOVENTA\n\n"
     "• Пробный доступ действует 7 дней с момента заполнения профиля и "
     "предоставляется один раз на аккаунт Telegram.\n"
     f"• Подписка стоит {MONTHLY_PRICE_STARS} ⭐ за 30 дней и автоматически "

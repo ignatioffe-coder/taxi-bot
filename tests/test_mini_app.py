@@ -524,7 +524,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         html = await response.text()
-        self.assertIn("Taxi Forecast", html)
+        self.assertIn("MOVENTA", html)
         self.assertNotIn("leaflet", html.lower())
 
         response = await self.client.get("/static/app.js")

@@ -1,4 +1,4 @@
-"""Telegram launcher for the Taxi Forecast Mini App."""
+"""Telegram launcher for the MOVENTA Mini App."""
 
 import asyncio
 import logging
@@ -31,7 +31,7 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(
-                text="📱 Открыть Taxi Forecast",
+                text="📱 Открыть MOVENTA",
                 web_app=WebAppInfo(url=config.WEBAPP_URL),
             )
         ]],
@@ -60,7 +60,7 @@ async def cmd_start(message: types.Message):
 
     await send_app_launcher(
         message,
-        "🚕 Taxi Forecast — приложение для водителей такси и курьеров.\n\n"
+        "🚕 MOVENTA — приложение для водителей такси и курьеров.\n\n"
         "Записывай смены, доходы и расходы, следи за прибылью "
         "и находи спрос по районам Москвы.",
     )
@@ -68,14 +68,14 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("app"))
 async def cmd_app(message: types.Message):
-    await send_app_launcher(message, "Запуск Taxi Forecast.")
+    await send_app_launcher(message, "Запуск MOVENTA.")
 
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     await send_app_launcher(
         message,
-        "Все функции Taxi Forecast находятся в Mini App. "
+        "Все функции MOVENTA находятся в Mini App. "
         "Открой его кнопкой под этим сообщением.\n\n"
         "Пробный период — 7 дней, затем подписка 300 ⭐ за 30 дней. "
         "Условия: /terms. Вопросы по оплате: /paysupport.",
@@ -142,7 +142,7 @@ async def process_pre_checkout_query(query: types.PreCheckoutQuery):
         ok=valid,
         error_message=None if valid else (
             "Счёт устарел или не соответствует тарифу. "
-            "Вернитесь в Taxi Forecast и запросите новый."
+            "Вернитесь в MOVENTA и запросите новый."
         ),
     )
 
@@ -182,7 +182,7 @@ async def process_successful_payment(message: types.Message):
         )
         return
     await message.answer(
-        "Оплата подтверждена! Подписка Taxi Forecast активна на 30 дней.",
+        "Оплата подтверждена! Подписка MOVENTA активна на 30 дней.",
         reply_markup=get_main_keyboard(),
     )
 
@@ -220,7 +220,7 @@ async def open_app_hint(message: types.Message):
                 "Не удалось передать сообщение поддержке. Попробуйте ещё раз позже."
             )
         return
-    await send_app_launcher(message, "Открой Taxi Forecast кнопкой ниже.")
+    await send_app_launcher(message, "Открой MOVENTA кнопкой ниже.")
 
 
 async def document_reminder_loop():
@@ -292,7 +292,7 @@ async def main():
     logger.info("Mini App server started")
 
     await bot.set_my_commands([
-        BotCommand(command="start", description="Запустить Taxi Forecast"),
+        BotCommand(command="start", description="Запустить MOVENTA"),
         BotCommand(command="app", description="Открыть Mini App"),
         BotCommand(command="help", description="Помощь"),
         BotCommand(command="terms", description="Условия подписки"),
