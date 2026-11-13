@@ -39,9 +39,11 @@ button { color: inherit; }
 .subscription-help p { margin: 9px 0 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
 .subscription-screen a { color: #81b4ff; text-decoration: underline; text-underline-offset: 2px; }
 .subscription-consent { display: flex; align-items: flex-start; gap: 9px; margin-top: 14px; color: #b6c0ca; font-size: 10px; line-height: 1.5; }
+.subscription-consent[hidden], .subscription-card .primary-button[hidden], .subscription-card .text-button[hidden] { display: none; }
 .subscription-consent input { width: 17px; height: 17px; flex: 0 0 auto; margin: 0; accent-color: var(--amber); }
 .subscription-card .primary-button { width: 100%; margin-top: 12px; }
 .subscription-card .primary-button:disabled { cursor: not-allowed; }
+.subscription-card .danger-button { color: #ff8176; }
 .subscription-support { margin: 10px 0 0; color: var(--muted); text-align: center; font-size: 9px; }
 .subscription-support code { color: var(--text); }
 .onboarding-options { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 4px 0 0; padding: 0; border: 0; }

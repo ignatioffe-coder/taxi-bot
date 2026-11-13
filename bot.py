@@ -3,10 +3,9 @@
 import asyncio
 import logging
 import os
-import time
 
 from aiohttp import web
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import Bot, Dispatcher, types
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import (
@@ -19,6 +18,7 @@ from aiogram.types import (
 import config
 import database
 import subscriptions
+import yookassa
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -77,7 +77,8 @@ async def cmd_help(message: types.Message):
         message,
         "Все функции MOVENTA находятся в Mini App. "
         "Открой его кнопкой под этим сообщением.\n\n"
-        "Пробный период — 7 дней, затем подписка 300 ⭐ за 30 дней. "
+        "Пробный период — 7 дней, затем подписка 500 ₽ за 30 дней "
+        "с автопродлением через ЮKassa. "
         "Условия: /terms. Вопросы по оплате: /paysupport.",
     )
 
@@ -127,64 +128,6 @@ async def cmd_support_reply(message: types.Message):
         await message.answer("Не удалось отправить ответ пользователю.")
         return
     await message.answer("Ответ отправлен.")
-
-
-@dp.pre_checkout_query()
-async def process_pre_checkout_query(query: types.PreCheckoutQuery):
-    valid = await asyncio.to_thread(
-        database.validate_star_invoice,
-        query.from_user.id,
-        query.invoice_payload,
-        query.currency,
-        query.total_amount,
-    )
-    await query.answer(
-        ok=valid,
-        error_message=None if valid else (
-            "Счёт устарел или не соответствует тарифу. "
-            "Вернитесь в MOVENTA и запросите новый."
-        ),
-    )
-
-
-@dp.message(F.successful_payment)
-async def process_successful_payment(message: types.Message):
-    payment = message.successful_payment
-    user = message.from_user
-    if payment is None or user is None:
-        return
-    expires_at = payment.subscription_expiration_date
-    if expires_at is None:
-        expires_at = int(time.time()) + subscriptions.SUBSCRIPTION_PERIOD_SECONDS
-        logger.warning(
-            "Stars payment for user %s had no subscription expiration; "
-            "using one 30-day period",
-            user.id,
-        )
-    recorded = await asyncio.to_thread(
-        database.record_star_payment,
-        user.id,
-        payment.invoice_payload,
-        payment.currency,
-        payment.total_amount,
-        payment.telegram_payment_charge_id,
-        expires_at,
-    )
-    if not recorded:
-        logger.error(
-            "Could not apply Stars payment %s for user %s",
-            payment.telegram_payment_charge_id,
-            user.id,
-        )
-        await message.answer(
-            "Платёж получен, но доступ пока не обновился. "
-            "Отправьте /paysupport, и мы проверим оплату."
-        )
-        return
-    await message.answer(
-        "Оплата подтверждена! Подписка MOVENTA активна на 30 дней.",
-        reply_markup=get_main_keyboard(),
-    )
 
 
 @dp.message()
@@ -279,13 +222,109 @@ async def notification_loop():
         await asyncio.sleep(60 * 15)
 
 
+async def notify_yookassa_renewal_failure(user_id: int) -> None:
+    try:
+        await bot.send_message(
+            user_id,
+            "Не удалось автоматически продлить подписку MOVENTA. "
+            "Автопродление отключено; оформи подписку заново в профиле Mini App.",
+            reply_markup=get_main_keyboard(),
+        )
+    except TelegramAPIError:
+        logger.exception(
+            "Could not notify user %s about renewal failure",
+            user_id,
+        )
+
+
+async def yookassa_renewal_loop():
+    """Run due recurring charges; ambiguous requests reuse the same idempotency key."""
+    while True:
+        if yookassa.is_configured():
+            try:
+                due_subscriptions = await asyncio.to_thread(
+                    database.get_due_yookassa_subscriptions
+                )
+                for subscription in due_subscriptions:
+                    user_id = subscription["user_id"]
+                    try:
+                        payment = await asyncio.to_thread(
+                            database.start_yookassa_payment,
+                            user_id,
+                            "renewal",
+                        )
+                        if payment["provider_payment_id"]:
+                            provider_payment = await asyncio.to_thread(
+                                yookassa.get_payment,
+                                payment["provider_payment_id"],
+                            )
+                        else:
+                            provider_payment = await asyncio.to_thread(
+                                yookassa.create_recurring_payment,
+                                payment["payment_ref"],
+                                user_id,
+                                payment["payment_method_id"],
+                                payment["idempotence_key"],
+                            )
+                            updated = await asyncio.to_thread(
+                                database.update_yookassa_payment,
+                                payment["payment_ref"],
+                                provider_payment.get("id", ""),
+                                provider_payment.get("status", "pending"),
+                            )
+                            if not updated:
+                                logger.error(
+                                    "Could not save YooKassa renewal %s",
+                                    payment["payment_ref"],
+                                )
+                                continue
+                        if provider_payment.get("status") == "succeeded":
+                            recorded = await asyncio.to_thread(
+                                database.record_yookassa_payment,
+                                payment["payment_ref"],
+                                provider_payment,
+                            )
+                            if not recorded:
+                                logger.error(
+                                    "Could not apply YooKassa renewal %s",
+                                    payment["payment_ref"],
+                                )
+                        elif provider_payment.get("status") == "canceled":
+                            canceled_user = await asyncio.to_thread(
+                                database.cancel_yookassa_payment,
+                                payment["payment_ref"],
+                            )
+                            if canceled_user is not None:
+                                await notify_yookassa_renewal_failure(canceled_user)
+                    except yookassa.YooKassaError as exc:
+                        logger.exception(
+                            "YooKassa renewal failed for user %s",
+                            user_id,
+                        )
+                        if exc.status_code == 400:
+                            canceled_user = await asyncio.to_thread(
+                                database.cancel_yookassa_payment,
+                                payment["payment_ref"],
+                            )
+                            if canceled_user is not None:
+                                await notify_yookassa_renewal_failure(canceled_user)
+                    except ValueError:
+                        logger.exception(
+                            "Invalid YooKassa renewal state for user %s",
+                            user_id,
+                        )
+            except Exception:
+                logger.exception("YooKassa renewal cycle failed")
+        await asyncio.sleep(60 * 15)
+
+
 async def main():
     database.init_db()
     logger.info("База данных инициализирована")
 
     from mini_app import create_app
 
-    app_runner = web.AppRunner(create_app(bot))
+    app_runner = web.AppRunner(create_app())
     await app_runner.setup()
     site = web.TCPSite(app_runner, "0.0.0.0", int(os.getenv("PORT", "8080")))
     await site.start()
@@ -306,12 +345,16 @@ async def main():
     notification_task = asyncio.create_task(
         notification_loop(), name="notifications"
     )
+    renewal_task = asyncio.create_task(
+        yookassa_renewal_loop(), name="yookassa-renewals"
+    )
     try:
         await dp.start_polling(bot)
     finally:
         reminder_task.cancel()
         notification_task.cancel()
-        for task in (reminder_task, notification_task):
+        renewal_task.cancel()
+        for task in (reminder_task, notification_task, renewal_task):
             try:
                 await task
             except asyncio.CancelledError:
