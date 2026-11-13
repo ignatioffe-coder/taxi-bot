@@ -78,7 +78,7 @@ def describe_weather(code: int | None) -> tuple[str, str, float]:
 
 
 def get_weather(force: bool = False) -> dict | None:
-    """Текущая погода в Москве. None, если источник недоступен."""
+    """Текущая погода и ближайший почасовой прогноз в Москве."""
     with _lock:
         cached = _weather_cache["value"]
         if cached and not force and time.monotonic() - _weather_cache["at"] < WEATHER_CACHE_TTL:
@@ -91,14 +91,48 @@ def get_weather(force: bool = False) -> dict | None:
                 "latitude": MOSCOW_LAT,
                 "longitude": MOSCOW_LON,
                 "current": "temperature_2m,precipitation,weather_code,wind_speed_10m",
+                "hourly": (
+                    "temperature_2m,precipitation_probability,precipitation,rain,"
+                    "snowfall,weather_code,wind_speed_10m,wind_gusts_10m"
+                ),
                 "timezone": TIMEZONE,
             },
             timeout=WEATHER_TIMEOUT,
         )
         response.raise_for_status()
-        current = response.json().get("current") or {}
+        payload = response.json()
+        current = payload.get("current") or {}
         code = current.get("weather_code")
         text, emoji, impact = describe_weather(code)
+        hourly = payload.get("hourly") or {}
+        forecast = []
+        times = hourly.get("time") or []
+        current_time = current.get("time")
+        for index, forecast_time in enumerate(times):
+            if current_time and forecast_time < current_time:
+                continue
+            forecast_code = _hourly_value(hourly, "weather_code", index)
+            forecast_text, forecast_emoji, forecast_impact = describe_weather(
+                forecast_code
+            )
+            forecast.append({
+                "time": forecast_time.split("T")[-1][:5],
+                "temperature": _hourly_value(hourly, "temperature_2m", index),
+                "precipitation_probability": _hourly_value(
+                    hourly, "precipitation_probability", index
+                ),
+                "precipitation": _hourly_value(hourly, "precipitation", index),
+                "rain": _hourly_value(hourly, "rain", index),
+                "snowfall": _hourly_value(hourly, "snowfall", index),
+                "wind": _hourly_value(hourly, "wind_speed_10m", index),
+                "wind_gusts": _hourly_value(hourly, "wind_gusts_10m", index),
+                "code": forecast_code,
+                "text": forecast_text,
+                "emoji": forecast_emoji,
+                "impact": forecast_impact,
+            })
+            if len(forecast) == 3:
+                break
         value = {
             "temperature": current.get("temperature_2m"),
             "precipitation": current.get("precipitation"),
@@ -107,6 +141,7 @@ def get_weather(force: bool = False) -> dict | None:
             "text": text,
             "emoji": emoji,
             "impact": impact,
+            "forecast": forecast,
             "source": "open-meteo",
         }
     except Exception:  # noqa: BLE001 - погода не должна ронять прогноз
@@ -116,6 +151,11 @@ def get_weather(force: bool = False) -> dict | None:
         _weather_cache["value"] = value
         _weather_cache["at"] = time.monotonic()
     return dict(value)
+
+
+def _hourly_value(hourly: dict, key: str, index: int):
+    values = hourly.get(key) or []
+    return values[index] if index < len(values) else None
 
 
 def load_poi_density() -> dict:

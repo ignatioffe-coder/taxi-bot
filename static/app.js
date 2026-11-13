@@ -46,6 +46,7 @@
   let coefficientMapHasInitialBounds = false;
   let coefficientAreas = null;
   let coefficientMapDataSignature = null;
+  let coefficientMapRenderVersion = 0;
   let coefficientMapViewportSize = "";
   let preferredName = "";
   let currentSubscription = null;
@@ -383,6 +384,12 @@
     document.querySelectorAll(".nav-button").forEach((button) => {
       button.classList.toggle("active", button.dataset.view === view);
     });
+    if (tg) {
+      const swipeMethod = view === "districts"
+        ? tg.disableVerticalSwipes
+        : tg.enableVerticalSwipes;
+      if (typeof swipeMethod === "function") swipeMethod.call(tg);
+    }
     if (view === "districts") {
       window.requestAnimationFrame(() => {
         renderCoefficientMap(districtGroups, true);
@@ -414,6 +421,17 @@
   }
 
   const mapContainer = $("coefficient-map");
+  function restoreCoefficientMapGestures() {
+    if (coefficientMap) {
+      coefficientMap.behaviors.enable(["drag", "multiTouch"]);
+    }
+  }
+  mapContainer.addEventListener("touchend", restoreCoefficientMapGestures, {
+    passive: true,
+  });
+  mapContainer.addEventListener("touchcancel", restoreCoefficientMapGestures, {
+    passive: true,
+  });
   if (typeof ResizeObserver !== "undefined") {
     const mapResizeObserver = new ResizeObserver(fitCoefficientMapToViewportIfResized);
     mapResizeObserver.observe(mapContainer);
@@ -548,10 +566,10 @@
     const container = $("district-groups");
     container.replaceChildren();
 
-    districtGroups.forEach((group, index) => {
+    districtGroups.forEach((group) => {
       const details = document.createElement("details");
       details.className = "district-group";
-      details.open = index === 0;
+      details.open = group.name === "Центральный округ";
 
       const summary = document.createElement("summary");
       const title = document.createElement("span");
@@ -723,6 +741,7 @@
   }
 
   function renderCoefficientMap(groups, force = false) {
+    const renderVersion = ++coefficientMapRenderVersion;
     const badge = $("map-report-count");
     updateMapLegend();
     if (yandexMapsApiKey === null) return;
@@ -756,6 +775,7 @@
     $("map-message").textContent = "";
 
     loadYandexMaps().then((ymaps) => {
+      if (renderVersion !== coefficientMapRenderVersion) return;
       if (!document.querySelector("#view-districts").classList.contains("active")) {
         return;
       }
@@ -836,7 +856,7 @@
         }, {
           fillColor: color,
           fillOpacity: hasData ? 0.45 : 0.06,
-          strokeColor: hasData ? color : reportCount ? "#ffbf55" : "#87939e",
+          strokeColor: "#52616d",
           strokeOpacity: 0.9,
           strokeWidth: 1,
         }));
@@ -853,6 +873,7 @@
       message.replaceChildren();
       window.requestAnimationFrame(fitCoefficientMapToViewport);
     }).catch(() => {
+      if (renderVersion !== coefficientMapRenderVersion) return;
       showMapError("Не удалось загрузить карту. Проверь интернет, VPN или домен API-ключа Яндекса.");
     });
   }
@@ -898,6 +919,23 @@
       .join(" ");
     badge.textContent = `${parts} · Open-Meteo`;
     badge.classList.remove("unavailable");
+    const outlook = $("city-weather-outlook");
+    if (outlook) {
+      const periods = Array.isArray(weather.forecast) ? weather.forecast : [];
+      outlook.textContent = periods.length
+        ? `Далее: ${periods.map((period) => {
+          const temperature = typeof period.temperature === "number"
+            ? ` ${Math.round(period.temperature)}°`
+            : "";
+          const probability = typeof period.precipitation_probability === "number"
+            && period.precipitation_probability > 0
+            ? ` · ${Math.round(period.precipitation_probability)}% осадков`
+            : "";
+          return `${period.time} ${period.emoji || ""}${temperature}${probability}`;
+        }).join(" · ")}`
+        : "";
+      outlook.hidden = periods.length === 0;
+    }
   }
 
   function renderRecommendations(forecast) {

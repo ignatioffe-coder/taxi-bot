@@ -1,6 +1,7 @@
 import os
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("BOT_TOKEN", "test-bot-token")
 
@@ -44,6 +45,53 @@ class PoiDensityTests(unittest.TestCase):
     def test_all_zero_density_returns_empty_mapping(self):
         empty = {"Район": {"food": 0, "shop": 0, "education": 0, "service": 0}}
         self.assertEqual(external_factors.poi_scores(empty), {})
+
+
+class OpenMeteoForecastTests(unittest.TestCase):
+    def setUp(self):
+        external_factors._weather_cache.update({"value": None, "at": 0.0})
+
+    def tearDown(self):
+        external_factors._weather_cache.update({"value": None, "at": 0.0})
+
+    @patch("external_factors.requests.get")
+    def test_weather_includes_upcoming_hourly_conditions(self, get):
+        response = Mock()
+        response.json.return_value = {
+            "current": {
+                "time": "2026-03-10T10:15",
+                "temperature_2m": 4.0,
+                "precipitation": 0.0,
+                "weather_code": 2,
+                "wind_speed_10m": 8.0,
+            },
+            "hourly": {
+                "time": [
+                    "2026-03-10T09:00",
+                    "2026-03-10T10:00",
+                    "2026-03-10T11:00",
+                    "2026-03-10T12:00",
+                ],
+                "temperature_2m": [2.0, 3.0, 4.0, 5.0],
+                "precipitation_probability": [0, 10, 70, 90],
+                "precipitation": [0.0, 0.0, 1.2, 2.0],
+                "rain": [0.0, 0.0, 1.2, 2.0],
+                "snowfall": [0.0, 0.0, 0.0, 0.0],
+                "weather_code": [0, 2, 63, 65],
+                "wind_speed_10m": [5.0, 6.0, 10.0, 12.0],
+                "wind_gusts_10m": [8.0, 9.0, 15.0, 18.0],
+            },
+        }
+        get.return_value = response
+
+        weather = external_factors.get_weather(force=True)
+
+        self.assertEqual([period["time"] for period in weather["forecast"]], ["11:00", "12:00"])
+        self.assertEqual(weather["forecast"][0]["temperature"], 4.0)
+        self.assertEqual(weather["forecast"][0]["precipitation_probability"], 70)
+        self.assertEqual(weather["forecast"][0]["text"], "Дождь")
+        self.assertEqual(weather["forecast"][0]["wind_gusts"], 15.0)
+        self.assertIn("precipitation_probability", get.call_args.kwargs["params"]["hourly"])
 
 
 class ForecastFactorTests(unittest.TestCase):

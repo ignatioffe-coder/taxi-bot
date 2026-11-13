@@ -60,6 +60,7 @@ button { color: inherit; }
 .brand-city { margin: 0; color: var(--muted); font-size: 11px; }
 .brand-weather { margin: 4px 0 0; color: var(--mint); font-size: 9px; }
 .brand-weather.unavailable { color: var(--muted); }
+.brand-weather-outlook { max-width: 290px; margin: 3px 0 0; color: var(--muted); font-size: 8px; line-height: 1.35; }
 .icon-button { width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); font-size: 24px; }
 .welcome { margin-bottom: 20px; }
 h1, h2, h3, p { margin-top: 0; }
