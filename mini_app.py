@@ -8,14 +8,12 @@ import logging
 import math
 import sqlite3
 import time
+from urllib.parse import urlparse
 from datetime import date, datetime, time as datetime_time, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl
 
 from aiohttp import web
-from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError
-from aiogram.types import LabeledPrice
 
 import config
 import crowd_signals
@@ -25,10 +23,10 @@ import external_factors
 import heatmap
 import subscriptions
 import weather
+import yookassa
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-PAYMENT_BOT_KEY = web.AppKey("payment_bot", Bot)
 WEATHER_OPTIONS = {"", "Ясно", "Облачно", "Дождь", "Снег", "Туман", "Гроза"}
 WORK_TYPES = {"taxi", "courier"}
 VEHICLE_TYPES = {"", "car", "motorcycle", "bicycle", "scooter", "foot", "other"}
@@ -124,7 +122,10 @@ async def api_rate_limit_middleware(
     request: web.Request,
     handler,
 ) -> web.StreamResponse:
-    if not request.path.startswith("/api/") or request.path == "/api/map-config":
+    if not request.path.startswith("/api/") or request.path in {
+        "/api/map-config",
+        "/api/yookassa/webhook",
+    }:
         return await handler(request)
 
     user = _authenticated_user(request)
@@ -516,7 +517,7 @@ async def get_profile(request: web.Request) -> web.Response:
             database.get_subscription_access, user["id"]
         )
         subscription_access.update({
-            "price_stars": subscriptions.MONTHLY_PRICE_STARS,
+            "price_rub": subscriptions.MONTHLY_PRICE_RUB,
             "period_days": subscriptions.SUBSCRIPTION_PERIOD_SECONDS // (24 * 60 * 60),
         })
     notifications = (
@@ -622,7 +623,7 @@ async def complete_onboarding(request: web.Request) -> web.Response:
     return web.json_response({"completed": True})
 
 
-async def create_subscription_invoice(request: web.Request) -> web.Response:
+async def create_subscription_payment(request: web.Request) -> web.Response:
     user = _authenticated_user(request)
     if not await asyncio.to_thread(database.is_user_onboarded, user["id"]):
         raise web.HTTPForbidden(text="Complete your profile before subscribing")
@@ -635,43 +636,188 @@ async def create_subscription_invoice(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text="Accept the subscription terms before paying")
 
     access = await asyncio.to_thread(database.get_subscription_access, user["id"])
-    if access["status"] == "paid":
+    if access["status"] == "paid" and access["auto_renew"]:
         raise web.HTTPConflict(text="Your subscription is already active")
-
-    payment_bot = request.app.get(PAYMENT_BOT_KEY)
-    if payment_bot is None:
-        raise web.HTTPServiceUnavailable(text="Telegram payments are not configured")
-
-    invoice_payload = subscriptions.create_invoice_payload(user["id"])
-    try:
-        invoice_url = await payment_bot.create_invoice_link(
-            title="MOVENTA — 30 дней",
-            description=(
-                f"Доступ ко всем функциям MOVENTA на 30 дней "
-                f"за {subscriptions.MONTHLY_PRICE_STARS} ⭐. "
-                "Автопродление — каждые 30 дней."
-            ),
-            payload=invoice_payload,
-            provider_token="",
-            currency="XTR",
-            prices=[
-                LabeledPrice(
-                    label="Подписка на 30 дней",
-                    amount=subscriptions.MONTHLY_PRICE_STARS,
-                )
-            ],
-            subscription_period=subscriptions.SUBSCRIPTION_PERIOD_SECONDS,
+    if not yookassa.is_configured():
+        raise web.HTTPServiceUnavailable(
+            text="Оплата ЮKassa пока не настроена. Попробуй позже."
         )
-    except TelegramAPIError:
-        logger.exception("Could not create Stars invoice for user %s", user["id"])
-        raise web.HTTPBadGateway(text="Could not create a Telegram Stars invoice")
+    await asyncio.to_thread(database.save_yookassa_terms, user["id"])
+    try:
+        local_payment = await asyncio.to_thread(
+            database.start_yookassa_payment,
+            user["id"],
+        )
+    except ValueError as exc:
+        raise web.HTTPConflict(text=str(exc))
 
-    await asyncio.to_thread(
-        database.save_star_invoice,
-        user["id"],
-        invoice_payload,
+    if local_payment["confirmation_url"]:
+        return web.json_response({
+            "confirmation_url": local_payment["confirmation_url"],
+            "payment_ref": local_payment["payment_ref"],
+        })
+
+    try:
+        payment = await asyncio.to_thread(
+            yookassa.create_subscription_payment,
+            local_payment["payment_ref"],
+            user["id"],
+            f"{config.WEBAPP_URL}/?payment=return",
+            local_payment["idempotence_key"],
+        )
+    except yookassa.YooKassaError as exc:
+        logger.warning(
+            "Could not create YooKassa payment for user %s (HTTP %s)",
+            user["id"],
+            exc.status_code,
+        )
+        if exc.status_code is not None and 400 <= exc.status_code < 500:
+            await asyncio.to_thread(
+                database.cancel_yookassa_payment,
+                local_payment["payment_ref"],
+            )
+        raise web.HTTPBadGateway(text="Не удалось создать платёж ЮKassa.")
+
+    confirmation_url = (payment.get("confirmation") or {}).get("confirmation_url", "")
+    if not isinstance(confirmation_url, str) or urlparse(confirmation_url).scheme != "https":
+        logger.error("YooKassa returned an invalid confirmation URL")
+        raise web.HTTPBadGateway(text="ЮKassa вернула некорректную ссылку на оплату.")
+    if not await asyncio.to_thread(
+        database.update_yookassa_payment,
+        local_payment["payment_ref"],
+        payment.get("id", ""),
+        payment.get("status", "pending"),
+        confirmation_url,
+    ):
+        logger.error("Could not persist YooKassa payment %s", local_payment["payment_ref"])
+        raise web.HTTPInternalServerError(text="Не удалось сохранить платёж.")
+    if payment.get("status") == "succeeded":
+        await _confirm_yookassa_payment(payment.get("id", ""))
+    return web.json_response({
+        "confirmation_url": confirmation_url,
+        "payment_ref": local_payment["payment_ref"],
+    })
+
+
+async def _confirm_yookassa_payment(payment_id: str) -> bool:
+    if not payment_id:
+        return False
+    try:
+        payment = await asyncio.to_thread(yookassa.get_payment, payment_id)
+    except yookassa.YooKassaError:
+        logger.exception("Could not verify YooKassa payment %s", payment_id)
+        return False
+    payment_ref = (payment.get("metadata") or {}).get("payment_ref")
+    metadata = payment.get("metadata") or {}
+    if (
+        payment.get("id") != payment_id
+        or not isinstance(payment_ref, str)
+        or not str(metadata.get("user_id", "")).isdigit()
+    ):
+        return False
+    local_payment = await asyncio.to_thread(
+        database.get_yookassa_payment,
+        payment_ref,
     )
-    return web.json_response({"invoice_url": invoice_url})
+    if not local_payment or local_payment["user_id"] != int(metadata["user_id"]):
+        return False
+    if not await asyncio.to_thread(
+        database.update_yookassa_payment,
+        payment_ref,
+        payment_id,
+        payment.get("status", "pending"),
+        (payment.get("confirmation") or {}).get("confirmation_url", ""),
+    ):
+        return False
+    if payment.get("status") == "succeeded":
+        recorded = await asyncio.to_thread(
+            database.record_yookassa_payment,
+            payment_ref,
+            payment,
+        )
+        if not recorded:
+            logger.error("Could not apply YooKassa payment %s", payment_id)
+        return recorded
+    if payment.get("status") == "canceled":
+        await asyncio.to_thread(database.cancel_yookassa_payment, payment_ref)
+    return False
+
+
+async def yookassa_webhook(request: web.Request) -> web.Response:
+    if not yookassa.is_configured():
+        raise web.HTTPServiceUnavailable(text="Payment provider is not configured")
+    try:
+        notification = await request.json()
+    except (json.JSONDecodeError, web.HTTPException):
+        raise web.HTTPBadRequest(text="Invalid notification")
+    if not isinstance(notification, dict):
+        raise web.HTTPBadRequest(text="Invalid notification")
+    event = notification.get("event")
+    payment_id = (notification.get("object") or {}).get("id")
+    if event not in {"payment.succeeded", "payment.canceled"}:
+        return web.json_response({"received": True})
+    if not isinstance(payment_id, str) or len(payment_id) > 100:
+        raise web.HTTPBadRequest(text="Invalid payment id")
+    try:
+        payment = await asyncio.to_thread(yookassa.get_payment, payment_id)
+    except yookassa.YooKassaError:
+        logger.exception("Could not retrieve YooKassa payment %s", payment_id)
+        raise web.HTTPBadGateway(text="Could not verify payment")
+    metadata = payment.get("metadata") or {}
+    payment_ref = metadata.get("payment_ref")
+    if not isinstance(payment_ref, str):
+        return web.json_response({"received": True})
+    local_payment = await asyncio.to_thread(
+        database.get_yookassa_payment,
+        payment_ref,
+    )
+    if not local_payment:
+        return web.json_response({"received": True})
+    if event == "payment.canceled":
+        if (
+            payment.get("id") != payment_id
+            or payment.get("status") != "canceled"
+            or str(metadata.get("user_id", "")) != str(local_payment["user_id"])
+            or metadata.get("purpose") != (
+                "subscription" if local_payment["kind"] == "initial"
+                else "subscription_renewal"
+            )
+            or (payment.get("amount") or {}).get("currency") != "RUB"
+            or (payment.get("amount") or {}).get("value") != (
+                f"{subscriptions.MONTHLY_PRICE_RUB:.2f}"
+            )
+        ):
+            raise web.HTTPBadRequest(text="Payment does not match the stored order")
+        updated = await asyncio.to_thread(
+            database.update_yookassa_payment,
+            payment_ref,
+            payment_id,
+            "canceled",
+        )
+        if not updated:
+            raise web.HTTPBadRequest(text="Payment does not match the stored order")
+        await asyncio.to_thread(database.cancel_yookassa_payment, payment_ref)
+        return web.json_response({"received": True})
+    if payment.get("status") != "succeeded":
+        raise web.HTTPBadGateway(text="Payment is not confirmed yet")
+    if not await _confirm_yookassa_payment(payment_id):
+        raise web.HTTPBadGateway(text="Payment could not be applied")
+    return web.json_response({"received": True})
+
+
+async def cancel_subscription_renewal(request: web.Request) -> web.Response:
+    user = await _onboarded_user(request)
+    canceled = await asyncio.to_thread(
+        database.cancel_yookassa_auto_renewal,
+        user["id"],
+    )
+    if not canceled:
+        raise web.HTTPConflict(text="Автопродление не включено.")
+    access = await asyncio.to_thread(database.get_subscription_access, user["id"])
+    return web.json_response({
+        "canceled": True,
+        "paid_until": access["paid_until"],
+    })
 
 
 async def save_profile(request: web.Request) -> web.Response:
@@ -917,9 +1063,8 @@ async def delete_personal_data(request: web.Request) -> web.Response:
     return web.json_response({"deleted": True})
 
 
-def create_app(payment_bot: Bot | None = None) -> web.Application:
+def create_app() -> web.Application:
     app = web.Application(middlewares=[api_rate_limit_middleware])
-    app[PAYMENT_BOT_KEY] = payment_bot
     app.router.add_get("/", index)
     app.router.add_static("/static/", path=STATIC_DIR)
     app.router.add_get("/api/districts", district_catalog)
@@ -927,7 +1072,12 @@ def create_app(payment_bot: Bot | None = None) -> web.Application:
     app.router.add_get("/api/weather", city_weather)
     app.router.add_get("/api/dashboard", dashboard)
     app.router.add_get("/api/profile", get_profile)
-    app.router.add_post("/api/subscription/invoice", create_subscription_invoice)
+    app.router.add_post("/api/subscription/payment", create_subscription_payment)
+    app.router.add_post(
+        "/api/subscription/cancel-renewal",
+        cancel_subscription_renewal,
+    )
+    app.router.add_post("/api/yookassa/webhook", yookassa_webhook)
     app.router.add_post("/api/onboarding", complete_onboarding)
     app.router.add_put("/api/profile", save_profile)
     app.router.add_post("/api/profile/directions", add_profile_direction)

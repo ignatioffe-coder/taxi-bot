@@ -2,8 +2,10 @@
 
 import sqlite3
 import time
+import uuid
 from contextlib import closing
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import List, Dict
 import config
 import subscriptions
@@ -312,9 +314,26 @@ def init_db():
             invoice_payload TEXT NOT NULL DEFAULT '',
             terms_accepted_at INTEGER,
             latest_charge_id TEXT NOT NULL DEFAULT '',
+            yookassa_payment_method_id TEXT NOT NULL DEFAULT '',
+            auto_renew INTEGER NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL
         )
     """)
+    subscription_columns = {
+        row[1] for row in cursor.execute(
+            "PRAGMA table_info(user_subscriptions)"
+        ).fetchall()
+    }
+    if "yookassa_payment_method_id" not in subscription_columns:
+        cursor.execute(
+            "ALTER TABLE user_subscriptions ADD COLUMN "
+            "yookassa_payment_method_id TEXT NOT NULL DEFAULT ''"
+        )
+    if "auto_renew" not in subscription_columns:
+        cursor.execute(
+            "ALTER TABLE user_subscriptions ADD COLUMN "
+            "auto_renew INTEGER NOT NULL DEFAULT 0"
+        )
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS telegram_star_payments (
             telegram_payment_charge_id TEXT PRIMARY KEY,
@@ -325,6 +344,36 @@ def init_db():
             subscription_expires_at INTEGER NOT NULL,
             created_at INTEGER NOT NULL
         )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS yookassa_payments (
+            payment_ref TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('initial', 'renewal')),
+            idempotence_key TEXT NOT NULL UNIQUE,
+            provider_payment_id TEXT UNIQUE,
+            payment_method_id TEXT NOT NULL DEFAULT '',
+            period_start INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending', 'waiting_for_capture', 'succeeded', 'canceled')),
+            confirmation_url TEXT NOT NULL DEFAULT '',
+            applied_at INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+    """)
+    payment_columns = {
+        row[1] for row in cursor.execute(
+            "PRAGMA table_info(yookassa_payments)"
+        ).fetchall()
+    }
+    if "applied_at" not in payment_columns:
+        cursor.execute(
+            "ALTER TABLE yookassa_payments ADD COLUMN applied_at INTEGER"
+        )
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_yookassa_payments_user_status
+        ON yookassa_payments (user_id, status, created_at)
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS payment_support_pending (
@@ -446,6 +495,7 @@ def get_subscription_access(user_id: int, now: int | None = None) -> Dict:
         row = conn.execute(
             """
             SELECT trial_started_at, trial_expires_at, paid_until
+                   , yookassa_payment_method_id, auto_renew
             FROM user_subscriptions
             WHERE user_id = ?
             """,
@@ -466,132 +516,346 @@ def get_subscription_access(user_id: int, now: int | None = None) -> Dict:
         "trial_started_at": row["trial_started_at"],
         "trial_expires_at": trial_expires_at,
         "paid_until": paid_until,
+        "auto_renew": bool(row["auto_renew"]),
+        "payment_method_saved": bool(row["yookassa_payment_method_id"]),
     }
 
 
-def save_star_invoice(user_id: int, invoice_payload: str, now: int | None = None):
+def start_yookassa_payment(
+    user_id: int,
+    kind: str = "initial",
+    now: int | None = None,
+) -> Dict:
+    current_time = int(time.time()) if now is None else now
+    if kind not in {"initial", "renewal"}:
+        raise ValueError("Unsupported payment type")
+
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("BEGIN IMMEDIATE")
+        subscription = conn.execute(
+            """
+            SELECT paid_until, terms_accepted_at, yookassa_payment_method_id,
+                   auto_renew
+            FROM user_subscriptions WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if not subscription or not subscription[1]:
+            conn.rollback()
+            raise ValueError("Subscription terms have not been accepted")
+
+        paid_until, _, saved_method_id, auto_renew = subscription
+        if kind == "initial":
+            pending = conn.execute(
+                """
+                SELECT * FROM yookassa_payments
+                WHERE user_id = ? AND kind = 'initial'
+                  AND status IN ('pending', 'waiting_for_capture')
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (user_id,),
+            ).fetchone()
+            if pending:
+                conn.commit()
+                return dict(pending)
+            if paid_until > current_time and auto_renew:
+                conn.rollback()
+                raise ValueError("Subscription is already active with auto-renewal")
+            period_start = max(paid_until, current_time)
+            method_id = ""
+        else:
+            if not auto_renew or not saved_method_id:
+                conn.rollback()
+                raise ValueError("Auto-renewal is not enabled")
+            period_start = paid_until
+            pending = conn.execute(
+                """
+                SELECT * FROM yookassa_payments
+                WHERE user_id = ? AND kind = 'renewal' AND period_start = ?
+                  AND status IN ('pending', 'waiting_for_capture')
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (user_id, period_start),
+            ).fetchone()
+            if pending:
+                conn.commit()
+                return dict(pending)
+            if paid_until > current_time + 24 * 60 * 60:
+                conn.rollback()
+                raise ValueError("Renewal is not due yet")
+            method_id = saved_method_id
+
+        payment_ref = uuid.uuid4().hex
+        idempotence_key = uuid.uuid4().hex
+        conn.execute(
+            """
+            INSERT INTO yookassa_payments (
+                payment_ref, user_id, kind, idempotence_key, payment_method_id,
+                period_start, status, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+            """,
+            (
+                payment_ref,
+                user_id,
+                kind,
+                idempotence_key,
+                method_id,
+                period_start,
+                current_time,
+                current_time,
+            ),
+        )
+        conn.commit()
+    return get_yookassa_payment(payment_ref)
+
+
+def get_yookassa_payment(payment_ref: str) -> Dict | None:
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM yookassa_payments WHERE payment_ref = ?",
+            (payment_ref,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_yookassa_payment(
+    payment_ref: str,
+    provider_payment_id: str,
+    status: str,
+    confirmation_url: str = "",
+    now: int | None = None,
+) -> bool:
+    if status not in {"pending", "waiting_for_capture", "succeeded", "canceled"}:
+        return False
+    current_time = int(time.time()) if now is None else now
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        with conn:
+            updated = conn.execute(
+                """
+                UPDATE yookassa_payments
+                SET provider_payment_id = ?, status = ?, confirmation_url = ?,
+                    updated_at = ?
+                WHERE payment_ref = ?
+                  AND (provider_payment_id IS NULL OR provider_payment_id = ?)
+                  AND (status <> 'succeeded' OR ? = 'succeeded')
+                """,
+                (
+                    provider_payment_id,
+                    status,
+                    confirmation_url,
+                    current_time,
+                    payment_ref,
+                    provider_payment_id,
+                    status,
+                ),
+            )
+    return updated.rowcount == 1
+
+
+def record_yookassa_payment(
+    payment_ref: str,
+    payment: Dict,
+    now: int | None = None,
+) -> bool:
+    current_time = int(time.time()) if now is None else now
+    try:
+        amount = Decimal(str(payment["amount"]["value"])).quantize(Decimal("0.01"))
+    except (KeyError, TypeError, InvalidOperation):
+        return False
+    metadata = payment.get("metadata") or {}
+    payment_method = payment.get("payment_method") or {}
+    expected_purpose = {
+        "initial": "subscription",
+        "renewal": "subscription_renewal",
+    }
+    if (
+        not payment.get("id")
+        or payment.get("status") != "succeeded"
+        or payment.get("paid") is not True
+        or payment.get("currency", payment.get("amount", {}).get("currency")) != "RUB"
+        or amount != Decimal(subscriptions.MONTHLY_PRICE_RUB)
+        or metadata.get("payment_ref") != payment_ref
+        or not str(metadata.get("user_id", "")).isdigit()
+    ):
+        return False
+
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("BEGIN IMMEDIATE")
+        record = conn.execute(
+            "SELECT * FROM yookassa_payments WHERE payment_ref = ?",
+            (payment_ref,),
+        ).fetchone()
+        if (
+            not record
+            or int(metadata["user_id"]) != record["user_id"]
+            or metadata.get("purpose") != expected_purpose[record["kind"]]
+            or (
+                record["provider_payment_id"]
+                and record["provider_payment_id"] != payment["id"]
+            )
+        ):
+            conn.rollback()
+            return False
+        subscription = conn.execute(
+            """
+            SELECT paid_until, terms_accepted_at
+            FROM user_subscriptions WHERE user_id = ?
+            """,
+            (record["user_id"],),
+        ).fetchone()
+        if not subscription or not subscription["terms_accepted_at"]:
+            conn.rollback()
+            return False
+        if record["applied_at"] is not None:
+            conn.commit()
+            return record["provider_payment_id"] == payment["id"]
+
+        effective_start = max(
+            current_time,
+            record["period_start"],
+            subscription["paid_until"],
+        )
+        expires_at = effective_start + subscriptions.SUBSCRIPTION_PERIOD_SECONDS
+        saved_method_id = (
+            payment_method.get("id")
+            if payment_method.get("saved") is True
+            else ""
+        )
+        if record["kind"] == "initial":
+            updated = conn.execute(
+                """
+                UPDATE user_subscriptions
+                SET paid_until = ?, yookassa_payment_method_id = ?,
+                    auto_renew = ?, latest_charge_id = ?, updated_at = ?
+                WHERE user_id = ?
+                """,
+                (
+                    expires_at,
+                    saved_method_id,
+                    int(bool(saved_method_id)),
+                    payment["id"],
+                    current_time,
+                    record["user_id"],
+                ),
+            )
+        else:
+            updated = conn.execute(
+                """
+                UPDATE user_subscriptions
+                SET paid_until = ?, latest_charge_id = ?, updated_at = ?
+                WHERE user_id = ? AND auto_renew = 1
+                  AND yookassa_payment_method_id = ?
+                """,
+                (
+                    expires_at,
+                    payment["id"],
+                    current_time,
+                    record["user_id"],
+                    record["payment_method_id"],
+                ),
+            )
+            if updated.rowcount != 1:
+                conn.rollback()
+                return False
+        conn.execute(
+            """
+            UPDATE yookassa_payments
+            SET provider_payment_id = ?, status = 'succeeded', applied_at = ?,
+                updated_at = ?
+            WHERE payment_ref = ?
+            """,
+            (payment["id"], current_time, current_time, payment_ref),
+        )
+        conn.commit()
+    return True
+
+
+def cancel_yookassa_payment(
+    payment_ref: str,
+    now: int | None = None,
+) -> int | None:
+    current_time = int(time.time()) if now is None else now
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        with conn:
+            row = conn.execute(
+                "SELECT user_id, kind FROM yookassa_payments WHERE payment_ref = ?",
+                (payment_ref,),
+            ).fetchone()
+            if not row:
+                return None
+            conn.execute(
+                """
+                UPDATE yookassa_payments SET status = 'canceled', updated_at = ?
+                WHERE payment_ref = ? AND status <> 'succeeded'
+                """,
+                (current_time, payment_ref),
+            )
+            if row[1] == "renewal":
+                conn.execute(
+                    """
+                    UPDATE user_subscriptions
+                    SET auto_renew = 0, yookassa_payment_method_id = '',
+                        updated_at = ?
+                    WHERE user_id = ?
+                    """,
+                    (current_time, row[0]),
+                )
+    return int(row[0])
+
+
+def cancel_yookassa_auto_renewal(user_id: int, now: int | None = None) -> bool:
     current_time = int(time.time()) if now is None else now
     with closing(sqlite3.connect(config.DB_PATH)) as conn:
         with conn:
             updated = conn.execute(
                 """
                 UPDATE user_subscriptions
-                SET invoice_payload = ?, terms_accepted_at = ?, updated_at = ?
-                WHERE user_id = ?
+                SET auto_renew = 0, yookassa_payment_method_id = '', updated_at = ?
+                WHERE user_id = ? AND auto_renew = 1
                 """,
-                (invoice_payload, current_time, current_time, user_id),
+                (current_time, user_id),
             )
-            if updated.rowcount != 1:
-                raise ValueError("Subscription trial has not been initialized")
+    return updated.rowcount == 1
 
 
-def validate_star_invoice(
-    user_id: int,
-    invoice_payload: str,
-    currency: str,
-    total_amount: int,
-) -> bool:
-    if (
-        currency != "XTR"
-        or total_amount != subscriptions.MONTHLY_PRICE_STARS
-        or not subscriptions.invoice_payload_belongs_to_user(invoice_payload, user_id)
-    ):
-        return False
-    with closing(sqlite3.connect(config.DB_PATH)) as conn:
-        row = conn.execute(
-            """
-            SELECT invoice_payload, terms_accepted_at
-            FROM user_subscriptions
-            WHERE user_id = ?
-            """,
-            (user_id,),
-        ).fetchone()
-    return bool(row and row[0] == invoice_payload and row[1])
-
-
-def record_star_payment(
-    user_id: int,
-    invoice_payload: str,
-    currency: str,
-    total_amount: int,
-    charge_id: str,
-    subscription_expires_at: int,
+def get_due_yookassa_subscriptions(
     now: int | None = None,
-) -> bool:
+    lead_seconds: int = 0,
+) -> List[Dict]:
     current_time = int(time.time()) if now is None else now
-    if (
-        not charge_id
-        or subscription_expires_at <= current_time
-        or currency != "XTR"
-        or total_amount != subscriptions.MONTHLY_PRICE_STARS
-        or not subscriptions.invoice_payload_belongs_to_user(invoice_payload, user_id)
-    ):
-        return False
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT s.user_id, s.paid_until, s.yookassa_payment_method_id
+            FROM user_subscriptions AS s
+            WHERE s.auto_renew = 1
+              AND s.yookassa_payment_method_id <> ''
+              AND s.paid_until <= ?
+            ORDER BY s.paid_until
+            """,
+            (current_time + lead_seconds,),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
+
+def save_yookassa_terms(user_id: int, now: int | None = None) -> bool:
+    current_time = int(time.time()) if now is None else now
     with closing(sqlite3.connect(config.DB_PATH)) as conn:
         with conn:
-            existing = conn.execute(
-                """
-                SELECT user_id, invoice_payload, currency, total_amount,
-                       subscription_expires_at
-                FROM telegram_star_payments
-                WHERE telegram_payment_charge_id = ?
-                """,
-                (charge_id,),
-            ).fetchone()
-            if existing:
-                return existing == (
-                    user_id,
-                    invoice_payload,
-                    currency,
-                    total_amount,
-                    subscription_expires_at,
-                )
-            subscription = conn.execute(
-                """
-                SELECT invoice_payload, terms_accepted_at
-                FROM user_subscriptions
-                WHERE user_id = ?
-                """,
-                (user_id,),
-            ).fetchone()
-            if (
-                not subscription
-                or subscription[0] != invoice_payload
-                or not subscription[1]
-            ):
-                return False
-            inserted = conn.execute(
-                """
-                INSERT OR IGNORE INTO telegram_star_payments (
-                    telegram_payment_charge_id, user_id, invoice_payload,
-                    currency, total_amount, subscription_expires_at, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    charge_id,
-                    user_id,
-                    invoice_payload,
-                    currency,
-                    total_amount,
-                    subscription_expires_at,
-                    current_time,
-                ),
-            )
-            if inserted.rowcount != 1:
-                return False
-            conn.execute(
+            updated = conn.execute(
                 """
                 UPDATE user_subscriptions
-                SET paid_until = MAX(paid_until, ?),
-                    latest_charge_id = ?,
-                    updated_at = ?
+                SET terms_accepted_at = ?, updated_at = ?
                 WHERE user_id = ?
                 """,
-                (subscription_expires_at, charge_id, current_time, user_id),
+                (current_time, current_time, user_id),
             )
-    return True
+    return updated.rowcount == 1
 
 
 def set_payment_support_pending(user_id: int, now: int | None = None):

@@ -299,7 +299,7 @@
       </section>
       <section class="privacy-card">
         <div class="section-heading"><div><p class="eyebrow">КОНФИДЕНЦИАЛЬНОСТЬ</p><h3>Твои данные</h3></div></div>
-        <p>Можно скачать копию или удалить данные приложения. Перед удалением активной платной подписки сначала отмени её в настройках Telegram.</p>
+        <p>Можно скачать копию или удалить данные приложения. Перед удалением активной платной подписки сначала отключи автопродление и дождись окончания оплаченного периода.</p>
         <div class="privacy-actions">
           <button id="export-data" class="text-button" type="button">Скачать копию</button>
           <button id="delete-data" class="text-button danger-button" type="button">Удалить данные</button>
@@ -323,34 +323,26 @@
         <li>Карта коэффициентов и сообщения сообщества</li>
         <li>Уведомления, когда спрос начинает расти</li>
       </ul>
-      <div class="subscription-price"><strong id="subscription-price-amount">300 ⭐</strong><span id="subscription-period-label">за 30 дней · автопродление</span></div>
-      <p class="subscription-price-note">Стоимость Stars зависит от региона и способа оплаты. Отменить автопродление можно в любой момент.</p>
-      <details class="subscription-help">
-        <summary>Как купить звёзды через @PremiumBot</summary>
-        <ol>
-          <li>Открой <a href="https://t.me/PremiumBot" id="premium-bot-link">официальный @PremiumBot</a> и нажми «Старт».</li>
-          <li>Выбери покупку Telegram Stars и пополни баланс минимум на 300 ⭐ удобным способом.</li>
-          <li>Вернись сюда и нажми кнопку оплаты.</li>
-        </ol>
-        <p>Если Stars уже есть на балансе, пополнять его не нужно. Доступность способов покупки и цена в рублях зависят от Telegram, региона и устройства.</p>
-      </details>
+      <div class="subscription-price"><strong id="subscription-price-amount">500 ₽</strong><span id="subscription-period-label">за 30 дней · автопродление</span></div>
+      <p class="subscription-price-note">Первый платёж — 500 ₽. Способ оплаты сохраняется в ЮKassa для списания раз в 30 дней. Отключить автопродление можно в профиле в любой момент.</p>
       <details id="subscription-terms" class="subscription-help">
         <summary>Условия подписки</summary>
         <ul>
           <li>Пробный доступ — 7 дней с момента заполнения профиля, один раз на аккаунт Telegram.</li>
-          <li>Подписку можно оплатить в любой момент. При ранней оплате 30-дневный период начинается сразу; если не оплачивать, после пробного периода автоматического списания не будет.</li>
-          <li>После оплаты подписка стоит 300 ⭐ за 30 дней и автоматически продлевается каждые 30 дней.</li>
-          <li>Автопродление можно отменить в Telegram: Настройки → Мои звёзды → Подписки. Доступ останется до конца оплаченного периода.</li>
+          <li>Подписку можно оплатить в любой момент. Если текущий оплаченный период ещё действует, новый период начнётся после него; во время пробного периода или после его окончания — после оплаты.</li>
+          <li>Подписка стоит 500 ₽ за 30 дней. Подтверждая оплату, я соглашаюсь сохранить выбранный способ оплаты в ЮKassa и автоматически списывать 500 ₽ каждые 30 дней. Возможность автоплатежей должна быть подключена для магазина в ЮKassa.</li>
+          <li>Автопродление можно отключить в профиле MOVENTA. Новых списаний не будет, доступ останется до конца оплаченного периода.</li>
           <li>По вопросам оплаты отправь команду /paysupport боту MOVENTA.</li>
         </ul>
       </details>
       <label class="subscription-consent" for="subscription-consent">
         <input id="subscription-consent" type="checkbox">
-        <span>Я прочитал(а) и принимаю <a href="#subscription-terms">условия подписки</a>.</span>
+        <span>Я принимаю <a href="#subscription-terms">условия</a>, согласен(на) на сохранение способа оплаты и автосписание 500 ₽ раз в 30 дней.</span>
       </label>
       <button id="subscribe-button" class="primary-button" type="button" disabled>
         <span id="subscribe-button-label">Оплатить подписку</span><span>→</span>
       </button>
+      <button id="subscription-cancel-button" class="text-button danger-button" type="button" hidden>Отключить автопродление</button>
       <p id="subscription-message" class="form-message" role="status"></p>
       <p class="subscription-support">Проблема с оплатой? Напиши боту <code>/paysupport</code>.</p>
     </div>

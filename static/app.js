@@ -49,6 +49,7 @@
   let coefficientMapViewportSize = "";
   let preferredName = "";
   let currentSubscription = null;
+  let paymentInProgress = false;
 
   if (tg) {
     tg.ready();
@@ -76,12 +77,28 @@
     const access = subscription || {};
     const title = $("subscription-title");
     const status = $("subscription-status");
-    $("subscription-price-amount").textContent = `${access.price_stars || 300} ⭐`;
+    $("subscription-price-amount").textContent = `${access.price_rub || 500} ₽`;
     $("subscription-period-label").textContent =
-      `за ${access.period_days || 30} дней · автопродление`;
+      access.status === "paid" && !access.auto_renew
+        ? `${access.period_days || 30} дней после текущего периода`
+        : `за ${access.period_days || 30} дней · автопродление`;
+    $("subscription-cancel-button").hidden =
+      !(access.status === "paid" && access.auto_renew);
+    $("subscribe-button").hidden =
+      access.status === "paid" && access.auto_renew;
+    $("subscription-consent").closest(".subscription-consent").hidden =
+      access.status === "paid" && access.auto_renew;
+    $("subscribe-button").disabled =
+      !access || !(access.status === "paid" && access.auto_renew)
+        ? !$("subscription-consent").checked
+        : true;
+    $("subscribe-button-label").textContent =
+      access.status === "trial" ? "Оплатить сейчас" : "Оплатить подписку";
     if (access.status === "paid" && access.paid_until) {
       title.textContent = "Подписка активна";
-      status.textContent = `Доступ открыт до ${new Date(access.paid_until * 1000).toLocaleDateString("ru-RU")}.`;
+      status.textContent = access.auto_renew
+        ? `Доступ до ${new Date(access.paid_until * 1000).toLocaleDateString("ru-RU")}. Следующее списание — 500 ₽ за 30 дней.`
+        : `Доступ до ${new Date(access.paid_until * 1000).toLocaleDateString("ru-RU")}. Автопродление отключено; если оплатить сейчас, новый период начнётся после этой даты.`;
     } else if (access.status === "trial" && access.trial_expires_at) {
       title.textContent = "Оплатить подписку сейчас";
       status.textContent = `Пробный период бесплатный до ${new Date(access.trial_expires_at * 1000).toLocaleDateString("ru-RU")}. При оплате сейчас 30-дневная подписка начнётся сразу.`;
@@ -117,12 +134,15 @@
     } else if (access.status === "paid") {
       badge.textContent = "Активна";
       badge.className = "subscription-badge";
-      info.textContent = `Доступ до ${endDate(access.paid_until)}. Подписка продлевается автоматически; отмена — в настройках Telegram → Мои звёзды → Подписки.`;
-      button.hidden = true;
+      info.textContent = access.auto_renew
+        ? `Доступ до ${endDate(access.paid_until)}. Следующее списание — 500 ₽ за 30 дней. Автопродление можно отключить здесь.`
+        : `Доступ до ${endDate(access.paid_until)}. Автопродление отключено.`;
+      $("profile-subscription-button-label").textContent =
+        access.auto_renew ? "Управлять подпиской" : "Продлить подписку";
     } else {
       badge.textContent = "Не активна";
       badge.className = "subscription-badge expired";
-      info.textContent = `Пробный период завершился ${endDate(access.trial_expires_at)}. Оформи подписку за ${access.price_stars || 300} ⭐ на 30 дней.`;
+      info.textContent = `Пробный период завершился ${endDate(access.trial_expires_at)}. Оформи подписку за ${access.price_rub || 500} ₽ на 30 дней.`;
       $("profile-subscription-button-label").textContent = "Оформить подписку";
     }
   }
@@ -159,7 +179,9 @@
           : response.status === 429 && path.startsWith("/api/reports")
             ? "Лимит сообщений на сегодня достигнут. Попробуй позже."
           : response.status === 409 && path === "/api/privacy/delete"
-            ? "Сначала отмени автопродление подписки в настройках Telegram."
+            ? "Дождись окончания оплаченного периода, прежде чем удалять данные."
+          : response.status === 409 && path === "/api/subscription/cancel-renewal"
+            ? "Автопродление уже отключено."
           : response.status === 409
             ? "Подписка уже активна."
           : "Сервис временно недоступен. Попробуй ещё раз.",
@@ -1276,17 +1298,19 @@
   }
 
   async function refreshAfterPayment() {
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, 700));
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
       const profile = await loadProfile(workType);
-      if (profile.subscription && profile.subscription.active) {
+      if (profile.subscription && profile.subscription.status === "paid") {
+        paymentInProgress = false;
         $("subscription-screen").hidden = true;
         await loadDashboard();
         return;
       }
     }
+    paymentInProgress = false;
     $("subscription-message").textContent =
-      "Платёж принят. Доступ обновится в ближайшее время — нажми «Обновить».";
+      "Если платёж прошёл, дождись подтверждения ЮKassa и обнови профиль.";
   }
 
   $("subscription-consent").addEventListener("change", (event) => {
@@ -1295,39 +1319,22 @@
   document.querySelector(".subscription-consent a").addEventListener("click", () => {
     $("subscription-terms").open = true;
   });
-  $("premium-bot-link").addEventListener("click", (event) => {
-    if (tg && tg.openTelegramLink) {
-      event.preventDefault();
-      tg.openTelegramLink(event.currentTarget.href);
-    }
-  });
   async function startSubscriptionPayment(button) {
     button.disabled = true;
-    $("subscription-message").textContent = "Готовим счёт Telegram Stars…";
+    $("subscription-message").textContent = "Переходим к защищённой оплате ЮKassa…";
     try {
-      const result = await (await api("/api/subscription/invoice", {
+      const result = await (await api("/api/subscription/payment", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accept_terms: $("subscription-consent").checked }),
       })).json();
-      $("subscription-message").textContent = "";
-      if (tg && typeof tg.openInvoice === "function") {
-        tg.openInvoice(result.invoice_url, (status) => {
-          if (status === "paid") {
-            refreshAfterPayment().catch(showError);
-          } else if (status === "failed") {
-            $("subscription-message").textContent = "Не удалось выполнить платёж. Попробуй ещё раз.";
-          } else if (status === "cancelled") {
-            $("subscription-message").textContent = "Оплата отменена.";
-          }
-          button.disabled = !$("subscription-consent").checked;
-        });
-      } else if (tg && tg.openTelegramLink) {
-        tg.openTelegramLink(result.invoice_url);
-      } else if (tg && tg.openLink) {
-        tg.openLink(result.invoice_url);
+      paymentInProgress = true;
+      $("subscription-message").textContent =
+        "После оплаты вернись сюда — статус обновится автоматически.";
+      if (tg && tg.openLink) {
+        tg.openLink(result.confirmation_url);
       } else {
-        window.location.assign(result.invoice_url);
+        window.location.assign(result.confirmation_url);
       }
     } catch (error) {
       showError(error);
@@ -1335,6 +1342,34 @@
       button.disabled = !$("subscription-consent").checked;
     }
   }
+
+  $("subscription-cancel-button").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    $("subscription-message").textContent = "";
+    try {
+      await api("/api/subscription/cancel-renewal", { method: "POST" });
+      await loadProfile(workType);
+      showSubscriptionScreen(currentSubscription);
+      $("subscription-message").textContent =
+        "Автопродление отключено. Доступ останется до конца оплаченного периода.";
+    } catch (error) {
+      showError(error);
+      $("subscription-message").textContent =
+        error.message || "Не удалось отключить автопродление.";
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && paymentInProgress) {
+      refreshAfterPayment().catch(showError);
+    }
+  });
+  window.addEventListener("focus", () => {
+    if (paymentInProgress) refreshAfterPayment().catch(showError);
+  });
 
   $("subscribe-button").addEventListener("click", (event) => {
     startSubscriptionPayment(event.currentTarget);
@@ -1747,6 +1782,8 @@
   });
 
   const now = new Date();
+  const paymentReturn =
+    new URLSearchParams(window.location.search).get("payment") === "return";
   $("today-label").textContent = new Intl.DateTimeFormat("ru-RU", {
     weekday: "long", day: "numeric", month: "long",
   }).format(now).toLocaleUpperCase("ru");
@@ -1765,6 +1802,17 @@
           $("onboarding-intro").textContent = "Заполни профиль один раз, чтобы открыть MOVENTA.";
           $("onboarding-message").textContent = "";
           $("onboarding-name").focus();
+          return;
+        }
+        if (
+          paymentReturn
+          && profile.subscription
+          && profile.subscription.status !== "paid"
+        ) {
+          onboardingScreen.hidden = true;
+          showSubscriptionScreen(profile.subscription);
+          paymentInProgress = true;
+          refreshAfterPayment().catch(showError);
           return;
         }
         if (!profile.subscription || !profile.subscription.active) {

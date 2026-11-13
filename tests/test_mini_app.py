@@ -20,15 +20,6 @@ from aiohttp.test_utils import TestClient, TestServer
 from mini_app import create_app, validate_init_data
 
 
-class FakePaymentBot:
-    def __init__(self):
-        self.invoice_calls = []
-
-    async def create_invoice_link(self, **kwargs):
-        self.invoice_calls.append(kwargs)
-        return "https://t.me/$test_invoice"
-
-
 def signed_init_data(user: dict, bot_token: str, auth_date: int) -> str:
     values = {
         "auth_date": str(auth_date),
@@ -70,8 +61,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         import database
 
         database.init_db()
-        self.payment_bot = FakePaymentBot()
-        self.client = TestClient(TestServer(create_app(self.payment_bot)))
+        self.client = TestClient(TestServer(create_app()))
         await self.client.start_server()
         self.init_data = signed_init_data(
             {"id": 123456, "first_name": "Driver", "username": "driver"},
@@ -430,7 +420,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             later_access["trial_started_at"], access["trial_started_at"]
         )
 
-    async def test_stars_invoice_requires_terms_and_activates_recurring_access(self):
+    async def test_yookassa_payment_requires_terms_and_creates_fixed_price_payment(self):
         import database
 
         headers = {"X-Telegram-Init-Data": self.init_data}
@@ -439,84 +429,232 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             database.get_subscription_access(123456)["status"], "trial"
         )
 
-        response = await self.client.post(
-            "/api/subscription/invoice",
-            headers=headers,
-            json={"accept_terms": False},
+        with patch("yookassa.is_configured", return_value=True), patch(
+            "yookassa.create_subscription_payment",
+            return_value={
+                "id": "yk-payment-1",
+                "status": "pending",
+                "confirmation": {
+                    "confirmation_url": "https://yookassa.example/checkout",
+                },
+            },
+        ) as create_payment:
+            response = await self.client.post(
+                "/api/subscription/payment",
+                headers=headers,
+                json={"accept_terms": False},
+            )
+            self.assertEqual(response.status, 400)
+            create_payment.assert_not_called()
+
+            response = await self.client.post(
+                "/api/subscription/payment",
+                headers=headers,
+                json={"accept_terms": True},
+            )
+
+        self.assertEqual(response.status, 200)
+        payment_response = await response.json()
+        self.assertEqual(
+            payment_response["confirmation_url"],
+            "https://yookassa.example/checkout",
         )
-        self.assertEqual(response.status, 400)
-        self.assertEqual(self.payment_bot.invoice_calls, [])
+        create_payment.assert_called_once()
+        self.assertEqual(create_payment.call_args.args[1], 123456)
+        self.assertEqual(
+            database.get_yookassa_payment(payment_response["payment_ref"])["status"],
+            "pending",
+        )
+        self.assertEqual(database.get_subscription_access(123456)["status"], "trial")
+
+    async def test_yookassa_webhook_verifies_payment_and_can_cancel_auto_renewal(self):
+        import database
+
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        with patch("yookassa.is_configured", return_value=True), patch(
+            "yookassa.create_subscription_payment",
+            return_value={
+                "id": "yk-payment-2",
+                "status": "pending",
+                "confirmation": {
+                    "confirmation_url": "https://yookassa.example/checkout",
+                },
+            },
+        ):
+            response = await self.client.post(
+                "/api/subscription/payment",
+                headers=headers,
+                json={"accept_terms": True},
+            )
+        self.assertEqual(response.status, 200)
+        payment_ref = (await response.json())["payment_ref"]
+        provider_payment = {
+            "id": "yk-payment-2",
+            "status": "succeeded",
+            "paid": True,
+            "amount": {"value": "500.00", "currency": "RUB"},
+            "currency": "RUB",
+            "metadata": {
+                "payment_ref": payment_ref,
+                "user_id": "123456",
+                "purpose": "subscription",
+            },
+            "payment_method": {"id": "pm-saved", "saved": True},
+        }
+        with patch("yookassa.is_configured", return_value=True), patch(
+            "yookassa.get_payment", return_value=provider_payment
+        ):
+            response = await self.client.post(
+                "/api/yookassa/webhook",
+                json={
+                    "event": "payment.succeeded",
+                    "object": {"id": "yk-payment-2"},
+                },
+            )
+        self.assertEqual(response.status, 200)
+        access = database.get_subscription_access(123456)
+        self.assertEqual(access["status"], "paid")
+        self.assertTrue(access["auto_renew"])
+        self.assertTrue(access["payment_method_saved"])
+        first_paid_until = access["paid_until"]
+
+        with patch("yookassa.is_configured", return_value=True), patch(
+            "yookassa.get_payment", return_value=provider_payment
+        ):
+            duplicate = await self.client.post(
+                "/api/yookassa/webhook",
+                json={
+                    "event": "payment.succeeded",
+                    "object": {"id": "yk-payment-2"},
+                },
+            )
+        self.assertEqual(duplicate.status, 200)
+        self.assertEqual(
+            database.get_subscription_access(123456)["paid_until"],
+            first_paid_until,
+        )
 
         response = await self.client.post(
-            "/api/subscription/invoice",
+            "/api/subscription/cancel-renewal",
             headers=headers,
-            json={"accept_terms": True},
         )
         self.assertEqual(response.status, 200)
-        self.assertEqual((await response.json())["invoice_url"], "https://t.me/$test_invoice")
-        invoice = self.payment_bot.invoice_calls[0]
-        self.assertEqual(invoice["currency"], "XTR")
-        self.assertEqual(invoice["prices"][0].amount, subscriptions.MONTHLY_PRICE_STARS)
-        self.assertEqual(
-            invoice["subscription_period"],
-            subscriptions.SUBSCRIPTION_PERIOD_SECONDS,
-        )
-        profile_response = await self.client.get("/api/profile", headers=headers)
-        profile = await profile_response.json()
-        self.assertEqual(profile["subscription"]["status"], "trial")
-        self.assertTrue(
-            database.validate_star_invoice(
-                123456,
-                invoice["payload"],
-                "XTR",
-                subscriptions.MONTHLY_PRICE_STARS,
-            )
-        )
-        self.assertFalse(
-            database.validate_star_invoice(
-                123456,
-                invoice["payload"],
-                "XTR",
-                subscriptions.MONTHLY_PRICE_STARS - 1,
-            )
-        )
+        access = database.get_subscription_access(123456)
+        self.assertEqual(access["status"], "paid")
+        self.assertFalse(access["auto_renew"])
+        self.assertFalse(access["payment_method_saved"])
 
-        expiration = int(time.time()) + subscriptions.SUBSCRIPTION_PERIOD_SECONDS
-        self.assertTrue(database.record_star_payment(
+    async def test_yookassa_webhook_rejects_wrong_amount(self):
+        import database
+
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        with patch("yookassa.is_configured", return_value=True), patch(
+            "yookassa.create_subscription_payment",
+            return_value={
+                "id": "yk-payment-3",
+                "status": "pending",
+                "confirmation": {
+                    "confirmation_url": "https://yookassa.example/checkout",
+                },
+            },
+        ):
+            response = await self.client.post(
+                "/api/subscription/payment",
+                headers=headers,
+                json={"accept_terms": True},
+            )
+        payment_ref = (await response.json())["payment_ref"]
+        provider_payment = {
+            "id": "yk-payment-3",
+            "status": "succeeded",
+            "paid": True,
+            "amount": {"value": "499.00", "currency": "RUB"},
+            "currency": "RUB",
+            "metadata": {
+                "payment_ref": payment_ref,
+                "user_id": "123456",
+                "purpose": "subscription",
+            },
+        }
+        with patch("yookassa.is_configured", return_value=True), patch(
+            "yookassa.get_payment", return_value=provider_payment
+        ):
+            response = await self.client.post(
+                "/api/yookassa/webhook",
+                json={
+                    "event": "payment.succeeded",
+                    "object": {"id": "yk-payment-3"},
+                },
+            )
+        self.assertEqual(response.status, 502)
+        access = database.get_subscription_access(123456)
+        self.assertEqual(access["status"], "trial")
+        self.assertEqual(access["paid_until"], 0)
+
+    async def test_yookassa_renewal_is_not_charged_before_paid_period_ends(self):
+        import database
+
+        now = int(time.time())
+        database.get_subscription_access(123456, now=now)
+        database.save_yookassa_terms(123456, now=now)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                """
+                UPDATE user_subscriptions
+                SET paid_until = ?, yookassa_payment_method_id = ?,
+                    auto_renew = 1
+                WHERE user_id = ?
+                """,
+                (now + 120, "pm-saved", 123456),
+            )
+            conn.commit()
+
+        self.assertEqual(database.get_due_yookassa_subscriptions(now=now), [])
+        due = database.get_due_yookassa_subscriptions(now=now + 120)
+        self.assertEqual([item["user_id"] for item in due], [123456])
+        payment = database.start_yookassa_payment(
             123456,
-            invoice["payload"],
-            "XTR",
-            subscriptions.MONTHLY_PRICE_STARS,
-            "charge-1",
-            expiration,
-        ))
-        self.assertTrue(database.record_star_payment(
-            123456,
-            invoice["payload"],
-            "XTR",
-            subscriptions.MONTHLY_PRICE_STARS,
-            "charge-1",
-            expiration,
-        ))
-        self.assertEqual(database.get_subscription_access(123456)["status"], "paid")
-        profile_response = await self.client.get("/api/profile", headers=headers)
-        profile = await profile_response.json()
-        self.assertEqual(profile["subscription"]["status"], "paid")
-        duplicate_invoice = await self.client.post(
-            "/api/subscription/invoice",
-            headers=headers,
-            json={"accept_terms": True},
+            "renewal",
+            now=now + 120,
         )
-        self.assertEqual(duplicate_invoice.status, 409)
-        self.assertEqual(len(self.payment_bot.invoice_calls), 1)
+        provider_payment = {
+            "id": "yk-renewal-1",
+            "status": "succeeded",
+            "paid": True,
+            "amount": {"value": "500.00", "currency": "RUB"},
+            "currency": "RUB",
+            "metadata": {
+                "payment_ref": payment["payment_ref"],
+                "user_id": "123456",
+                "purpose": "subscription_renewal",
+            },
+        }
+        self.assertTrue(database.update_yookassa_payment(
+            payment["payment_ref"],
+            "yk-renewal-1",
+            "succeeded",
+            now=now + 120,
+        ))
+        self.assertTrue(database.record_yookassa_payment(
+            payment["payment_ref"],
+            provider_payment,
+            now=now + 120,
+        ))
+        renewed_until = database.get_subscription_access(123456)["paid_until"]
         self.assertEqual(
-            (
-                await self.client.get(
-                    "/api/dashboard?work_type=taxi&period=week",
-                    headers=headers,
-                )
-            ).status,
-            200,
+            renewed_until,
+            now + 120 + subscriptions.SUBSCRIPTION_PERIOD_SECONDS,
+        )
+        self.assertTrue(database.record_yookassa_payment(
+            payment["payment_ref"],
+            provider_payment,
+            now=now + 240,
+        ))
+        self.assertEqual(
+            database.get_subscription_access(123456)["paid_until"],
+            renewed_until,
         )
 
     async def test_serves_mini_app_assets(self):
@@ -525,12 +663,18 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         html = await response.text()
         self.assertIn("MOVENTA", html)
+        self.assertIn("500 ₽", html)
+        self.assertIn("ЮKassa", html)
+        self.assertNotIn("PremiumBot", html)
         self.assertNotIn("leaflet", html.lower())
 
         response = await self.client.get("/static/app.js")
         self.assertEqual(response.status, 200)
-        self.assertIn("Telegram.WebApp", await response.text())
-        self.assertIn("api-maps.yandex.ru/2.1/", await response.text())
+        script = await response.text()
+        self.assertIn("Telegram.WebApp", script)
+        self.assertIn("api-maps.yandex.ru/2.1/", script)
+        self.assertIn("/api/subscription/cancel-renewal", script)
+        self.assertNotIn("/api/subscription/invoice", script)
 
         response = await self.client.get("/static/district-centers.json")
         self.assertEqual(response.status, 200)
