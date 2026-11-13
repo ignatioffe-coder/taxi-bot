@@ -36,6 +36,7 @@
   let workType = "taxi";
   let availableWorkTypes = [];
   let period = "week";
+  let mapLayer = "coefficients";
   let districtGroups = [];
   let districtCenters = {};
   let districtBoundaries = {};
@@ -398,6 +399,7 @@
   window.addEventListener("resize", fitCoefficientMapToViewportIfResized);
 
   function updateWorkTypeButtons() {
+    $("shift-start-field").hidden = workType !== "courier";
     document.querySelectorAll("[data-work-type]").forEach((button) => {
       button.hidden = !availableWorkTypes.includes(button.dataset.workType);
       button.classList.toggle("active", button.dataset.workType === workType);
@@ -509,12 +511,22 @@
     });
   }
 
-  function renderDistricts(groups) {
-    districtGroups = groups;
+  function renderDistricts(groups, forecast = currentForecast) {
+    currentForecast = forecast && forecast.work_type === workType ? forecast : null;
+    const forecastByDistrict = new Map(
+      (currentForecast ? currentForecast.items : []).map((item) => [item.district, item]),
+    );
+    districtGroups = groups.map((group) => ({
+      ...group,
+      districts: group.districts.map((district) => ({
+        ...district,
+        forecast: forecastByDistrict.get(district.name) || null,
+      })),
+    }));
     const container = $("district-groups");
     container.replaceChildren();
 
-    groups.forEach((group, index) => {
+    districtGroups.forEach((group, index) => {
       const details = document.createElement("details");
       details.className = "district-group";
       details.open = index === 0;
@@ -538,7 +550,9 @@
         name.textContent = district.name;
         const statistic = document.createElement("span");
         statistic.className = "district-stat";
-        statistic.textContent = district.records
+        statistic.textContent = mapLayer === "forecast" && district.forecast
+          ? `${scoreFor(district.forecast, selectedHorizon)}/100 · уверенность ${district.forecast.confidence}%`
+          : district.records
           ? `${district.avg_coefficient.toFixed(1)}x · ${district.records} зам. · ${formatCoefficientTime(district.last_update)}`
           : district.report_count
             ? `${district.report_count} ${plural(district.report_count, "сообщение", "сообщения", "сообщений")}`
@@ -571,7 +585,7 @@
     );
     updateReportForm();
     applyDistrictSearch();
-    renderCoefficientMap(groups);
+    renderCoefficientMap(districtGroups);
   }
 
   function coefficientColor(value, hasData) {
@@ -581,6 +595,46 @@
     if (value >= 1.6) return "#ffb84c";
     if (value >= 1.3) return "#f3d16b";
     return "#7ce0b1";
+  }
+
+  function forecastColor(value, hasData) {
+    if (!hasData) return "#87939e";
+    if (value >= 80) return "#d781ff";
+    if (value >= 60) return "#ff8176";
+    if (value >= 40) return "#ffb84c";
+    if (value >= 20) return "#f3d16b";
+    return "#7ce0b1";
+  }
+
+  function updateMapLegend() {
+    const legend = $("map-legend");
+    const definitions = mapLayer === "forecast"
+      ? [
+        ["no-data", "Нет прогноза"],
+        ["low", "0–19"],
+        ["mid-low", "20–39"],
+        ["medium", "40–59"],
+        ["high", "60–79"],
+        ["peak", "80–100"],
+        ["community", "есть сообщения"],
+      ]
+      : [
+        ["no-data", "Нет данных"],
+        ["low", "<1,3x"],
+        ["mid-low", "1,3–1,5x"],
+        ["medium", "1,6–1,9x"],
+        ["high", "2,0–2,4x"],
+        ["peak", "от 2,5x"],
+        ["community", "есть сообщения"],
+      ];
+    legend.replaceChildren();
+    definitions.forEach(([colorClass, label]) => {
+      const item = document.createElement("span");
+      const dot = document.createElement("i");
+      dot.className = `legend-dot ${colorClass}`;
+      item.append(dot, document.createTextNode(label));
+      legend.appendChild(item);
+    });
   }
 
   function toYandexCoordinates(geometry) {
@@ -648,6 +702,7 @@
 
   function renderCoefficientMap(groups, force = false) {
     const badge = $("map-report-count");
+    updateMapLegend();
     if (yandexMapsApiKey === null) return;
     if (!yandexMapsApiKey) {
       badge.textContent = "Нужен API-ключ";
@@ -660,15 +715,20 @@
     if (!Object.keys(districtCenters).length) return;
 
     const districts = groups.flatMap((group) => group.districts);
-    const reportingDistricts = districts.filter((district) => district.records > 0).length;
+    const reportingDistricts = districts.filter((district) => (
+      mapLayer === "forecast" ? Boolean(district.forecast) : district.records > 0
+    )).length;
     const dataSignature = JSON.stringify(districts.map((district) => [
       district.name,
+      mapLayer,
       district.records,
       district.avg_coefficient,
       district.last_update,
       district.report_count,
       district.reporters,
       district.report_categories,
+      district.forecast && scoreFor(district.forecast, selectedHorizon),
+      district.forecast && district.forecast.confidence,
     ]));
     badge.textContent = "Загружаем карту…";
     $("map-message").textContent = "";
@@ -709,13 +769,26 @@
         bounds[1][1] = bounds[1][1] === undefined
           ? coordinates[1] : Math.max(bounds[1][1], coordinates[1]);
 
-        const hasData = district.records > 0;
+        const forecastItem = district.forecast;
+        const hasData = mapLayer === "forecast"
+          ? Boolean(forecastItem)
+          : district.records > 0;
         const reportCount = Number(district.report_count) || 0;
         const reporterCount = Number(district.reporters) || 0;
-        const color = coefficientColor(district.avg_coefficient, hasData);
+        const forecastScore = forecastItem
+          ? scoreFor(forecastItem, selectedHorizon)
+          : 0;
+        const color = mapLayer === "forecast"
+          ? forecastColor(forecastScore, hasData)
+          : coefficientColor(district.avg_coefficient, hasData);
         const sampleCount = Number(district.records) || 0;
         const reportedAt = formatCoefficientTime(district.last_update);
-        const coefficientDescription = hasData
+        const forecastDescription = forecastItem
+          ? `Сигнал: <strong>${forecastScore}/100</strong><br>Уверенность: ${forecastItem.confidence}% · наблюдений: ${forecastItem.sample_count}<br>Оценка на ${selectedHorizon} минут`
+          : "Для этого района пока недостаточно данных прогноза";
+        const coefficientDescription = mapLayer === "forecast"
+          ? forecastDescription
+          : hasData
           ? `Средний коэффициент: <strong>${Number(district.avg_coefficient).toFixed(1)}x</strong><br>${sampleCount} ${plural(sampleCount, "замер", "замера", "замеров")}<br>Последний замер: ${reportedAt}`
           : "Пока нет замеров коэффициента от водителей";
         const communityDescription = reportCount
@@ -732,7 +805,9 @@
           properties: {
             balloonContentHeader: district.name,
             balloonContentBody: balloonBody,
-            hintContent: hasData
+            hintContent: mapLayer === "forecast" && forecastItem
+              ? `${district.name} · сигнал ${forecastScore}/100 · уверенность ${forecastItem.confidence}%`
+              : hasData
               ? `${district.name} · ${Number(district.avg_coefficient).toFixed(1)}x${reportCount ? ` · ${reportCount} сообщ.` : ""} · ${reportedAt}`
               : `${district.name} · ${reportCount ? `${reportCount} сообщ. сообщества` : "нет замеров"}`,
           },
@@ -932,7 +1007,14 @@
     document.querySelectorAll("#horizon-switch .horizon-button").forEach((el) => {
       el.classList.toggle("active", el === button);
     });
-    if (currentForecast) renderRecommendations(currentForecast);
+    if (currentForecast) {
+      renderRecommendations(currentForecast);
+      renderCoefficientMap(districtGroups, true);
+    }
+  });
+  $("map-layer").addEventListener("change", (event) => {
+    mapLayer = event.currentTarget.value;
+    renderDistricts(districtGroups, currentForecast);
   });
 
   function renderChart(chart) {
@@ -1644,6 +1726,7 @@
           charging_cost: value("charging_cost"),
           connectivity_cost: value("connectivity_cost"),
           hours_worked: value("hours_worked"),
+          started_at: form.elements.started_at.value || null,
           distance_km: value("distance_km"),
           orders_count: Number(form.elements.orders_count.value || 0),
         }),

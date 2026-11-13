@@ -110,6 +110,58 @@ class DemandForecastingTests(unittest.TestCase):
         self.assertEqual(item["net_income_per_hour"], 100)
         self.assertEqual(item["historical_net_income_per_hour"], 50)
 
+    def test_courier_forecast_matches_vehicle_and_shift_start_time(self):
+        matching_shifts = [
+            {
+                "district": self.district,
+                "gross_income": 1200,
+                "hours_worked": 10,
+                "timestamp": (self.now - timedelta(days=day)).isoformat(),
+                "started_at": (
+                    self.now - timedelta(days=day) + timedelta(minutes=30)
+                ).isoformat(),
+                "vehicle_type": "bicycle",
+            }
+            for day in (7, 14, 21)
+        ]
+        unrelated_shifts = [
+            {
+                "district": config.MOSCOW_DISTRICTS[1],
+                "gross_income": 5000,
+                "hours_worked": 10,
+                "timestamp": (self.now - timedelta(days=7)).isoformat(),
+                "started_at": (
+                    self.now - timedelta(days=7) + timedelta(hours=8)
+                ).isoformat(),
+                "vehicle_type": "bicycle",
+            },
+            {
+                "district": config.MOSCOW_DISTRICTS[2],
+                "gross_income": 5000,
+                "hours_worked": 10,
+                "timestamp": (self.now - timedelta(days=1)).isoformat(),
+                "vehicle_type": "car",
+            },
+        ]
+
+        forecast = build_forecast(
+            "courier",
+            {
+                "shifts": matching_shifts + unrelated_shifts,
+                "vehicle_type": "bicycle",
+            },
+            now=self.now,
+        )
+
+        self.assertTrue(forecast["horizon_supported"])
+        self.assertEqual(forecast["transport_basis"], "matched")
+        self.assertEqual(forecast["transport_type"], "bicycle")
+        personal_items = [
+            item for item in forecast["items"] if item["sample_count"] > 0
+        ]
+        self.assertEqual([item["district"] for item in personal_items], [self.district])
+        self.assertEqual(personal_items[0]["net_income_per_hour"], 120)
+
     def test_empty_inputs_return_explanation_without_recommendations(self):
         taxi = build_forecast("taxi", {"reports": []}, now=self.now)
         courier = build_forecast("courier", {"shifts": []}, now=self.now)

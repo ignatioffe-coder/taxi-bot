@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#11151b">
   <title>MOVENTA</title>
-  <link rel="stylesheet" href="/static/styles.css?v=30">
+  <link rel="stylesheet" href="/static/styles.css?v=32">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/static/app.js?v=30" defer></script>
+  <script src="/static/app.js?v=32" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -106,11 +106,17 @@
     </section>
 
     <section class="view" id="view-districts">
-      <div class="page-intro"><p class="eyebrow">СПРОС В ГОРОДЕ</p><h2>Карта коэффициентов</h2><p>Коэффициенты по сообщениям водителей действуют 2 часа. Нажми на район, чтобы посмотреть данные и время замера; серые районы пока без замеров.</p></div>
+      <div class="page-intro"><p class="eyebrow">СПРОС В ГОРОДЕ</p><h2>Карта районов</h2><p>Переключай коэффициенты водителей и прогнозный сигнал. Прогноз — оценка на основе доступных наблюдений, а не число заказов.</p></div>
       <section class="map-card">
         <div class="map-heading"><div><p class="eyebrow">МОСКВА · 132 РАЙОНА</p><h3>Ситуация на карте</h3></div><span id="map-report-count" class="map-badge">Загрузка…</span></div>
-        <div id="coefficient-map" role="application" aria-label="Карта коэффициентов по районам Москвы"></div>
-        <div class="map-legend" aria-label="Легенда коэффициентов">
+        <label class="map-layer-control" for="map-layer">Слой карты
+          <select id="map-layer" aria-label="Слой карты">
+            <option value="coefficients">Коэффициенты</option>
+            <option value="forecast">Прогноз районов</option>
+          </select>
+        </label>
+        <div id="coefficient-map" role="application" aria-label="Карта районов Москвы"></div>
+        <div id="map-legend" class="map-legend" aria-label="Легенда карты">
           <span><i class="legend-dot no-data"></i>Нет данных</span>
           <span><i class="legend-dot low"></i>&lt;1,3x</span>
           <span><i class="legend-dot mid-low"></i>1,3–1,5x</span>
@@ -174,6 +180,7 @@
           <div class="field"><label for="hours-input">Часов на линии</label><input id="hours-input" name="hours_worked" type="number" min="0" max="24" step="0.5" inputmode="decimal" placeholder="Например, 8"><p class="field-hint">Без часов не посчитать доход в час.</p></div>
           <div class="field"><label for="fuel-cost-input">Топливо, ₽</label><input id="fuel-cost-input" name="fuel_cost" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
         </div>
+        <div id="shift-start-field" class="field" hidden><label for="shift-started-at">Начало смены <span class="optional">необязательно</span></label><input id="shift-started-at" name="started_at" type="datetime-local"><p class="field-hint">Фактическое время начала помогает сравнивать курьерские смены для выбранного часа.</p></div>
         <div class="form-row">
           <div class="field"><label for="orders-count-input">Заказов <span class="optional">необязательно</span></label><input id="orders-count-input" name="orders_count" type="number" min="0" max="1000" step="1" inputmode="numeric" placeholder="0"></div>
           <div class="field"><label for="distance-km-input">Пробег, км <span class="optional">необязательно</span></label><input id="distance-km-input" name="distance_km" type="number" min="0" max="2000" step="0.1" inputmode="decimal" placeholder="0"></div>

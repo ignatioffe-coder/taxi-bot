@@ -928,6 +928,119 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((await response.json())["summary"]["shifts"], 0)
 
+    async def test_api_limits_repeated_writes_per_user_and_route(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        for _ in range(20):
+            response = await self.client.put(
+                "/api/profile",
+                headers=headers,
+                json={},
+            )
+            self.assertEqual(response.status, 400)
+
+        response = await self.client.put(
+            "/api/profile",
+            headers=headers,
+            json={},
+        )
+        self.assertEqual(response.status, 429)
+        self.assertGreater(int(response.headers["Retry-After"]), 0)
+
+    async def test_courier_shift_stores_start_time_and_profile_transport(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers, work_type="courier")
+        import database
+
+        profile = database.get_driver_profile(123456, "courier")
+        profile["vehicle_type"] = "bicycle"
+        database.save_driver_profile(123456, profile)
+        shift_start = (
+            database.get_moscow_time() - timedelta(hours=4)
+        ).strftime("%Y-%m-%dT%H:%M")
+        response = await self.client.post(
+            "/api/shifts",
+            headers=headers,
+            json={
+                "work_type": "courier",
+                "district": config.MOSCOW_DISTRICTS[0],
+                "gross_income": 1200,
+                "hours_worked": 4,
+                "started_at": shift_start,
+            },
+        )
+        self.assertEqual(response.status, 200)
+
+        inputs = database.get_demand_forecast_inputs(123456, "courier")
+        self.assertEqual(inputs["shifts"][0]["vehicle_type"], "bicycle")
+        self.assertEqual(
+            inputs["shifts"][0]["started_at"],
+            shift_start.replace("T", " ") + ":00",
+        )
+        dashboard_response = await self.client.get(
+            "/api/dashboard?work_type=courier&period=week",
+            headers=headers,
+        )
+        forecast = (await dashboard_response.json())["forecast"]
+        self.assertEqual(forecast["transport_basis"], "matched")
+        self.assertEqual(forecast["transport_type"], "bicycle")
+
+    async def test_legacy_shift_schema_adds_forecast_fields(self):
+        import database
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            with conn:
+                conn.execute("DROP TABLE work_shifts")
+                conn.execute("""
+                    CREATE TABLE work_shifts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        work_type TEXT NOT NULL,
+                        district TEXT,
+                        gross_income REAL NOT NULL DEFAULT 0,
+                        tips REAL NOT NULL DEFAULT 0,
+                        fuel_cost REAL NOT NULL DEFAULT 0,
+                        commission_cost REAL NOT NULL DEFAULT 0,
+                        maintenance_cost REAL NOT NULL DEFAULT 0,
+                        other_cost REAL NOT NULL DEFAULT 0,
+                        hours_worked REAL NOT NULL DEFAULT 0,
+                        timestamp DATETIME NOT NULL
+                    )
+                """)
+                conn.execute(
+                    """
+                    INSERT INTO work_shifts (
+                        user_id, work_type, district, gross_income, timestamp
+                    )
+                    VALUES (?, 'courier', ?, ?, ?)
+                    """,
+                    (
+                        123456,
+                        config.MOSCOW_DISTRICTS[0],
+                        1000,
+                        "2026-01-01 10:00:00",
+                    ),
+                )
+
+        database.init_db()
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(work_shifts)")
+            }
+            started_at, vehicle_type = conn.execute(
+                "SELECT started_at, vehicle_type FROM work_shifts WHERE user_id = ?",
+                (123456,),
+            ).fetchone()
+            rate_limit_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                ("api_rate_limits",),
+            ).fetchone()
+        self.assertIn("started_at", columns)
+        self.assertIn("vehicle_type", columns)
+        self.assertIsNone(started_at)
+        self.assertEqual(vehicle_type, "")
+        self.assertIsNotNone(rate_limit_table)
+
     async def test_shift_rejects_invalid_values(self):
         headers = {"X-Telegram-Init-Data": self.init_data}
         await self.complete_onboarding(headers)
@@ -938,6 +1051,20 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
                 "work_type": "taxi",
                 "gross_income": -10,
                 "hours_worked": 25,
+            },
+        )
+        self.assertEqual(response.status, 400)
+        future_start = (
+            config.get_moscow_time() + timedelta(days=1)
+        ).strftime("%Y-%m-%dT%H:%M")
+        response = await self.client.post(
+            "/api/shifts",
+            headers=headers,
+            json={
+                "work_type": "taxi",
+                "gross_income": 1000,
+                "hours_worked": 4,
+                "started_at": future_start,
             },
         )
         self.assertEqual(response.status, 400)
