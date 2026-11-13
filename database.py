@@ -135,6 +135,8 @@ def init_db():
             hours_worked REAL NOT NULL DEFAULT 0,
             distance_km REAL NOT NULL DEFAULT 0,
             orders_count INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT,
+            vehicle_type TEXT NOT NULL DEFAULT '',
             timestamp DATETIME NOT NULL
         )
     """)
@@ -151,9 +153,28 @@ def init_db():
                 f"ALTER TABLE work_shifts ADD COLUMN {column} "
                 f"{column_type} NOT NULL DEFAULT 0"
             )
+    if "started_at" not in shift_columns:
+        cursor.execute("ALTER TABLE work_shifts ADD COLUMN started_at TEXT")
+    if "vehicle_type" not in shift_columns:
+        cursor.execute(
+            "ALTER TABLE work_shifts ADD COLUMN vehicle_type TEXT NOT NULL DEFAULT ''"
+        )
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_work_shifts_user_time
         ON work_shifts (user_id, timestamp)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_work_shifts_user_start
+        ON work_shifts (user_id, work_type, started_at)
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS api_rate_limits (
+            user_id INTEGER NOT NULL,
+            route TEXT NOT NULL,
+            window_started_at INTEGER NOT NULL,
+            hits INTEGER NOT NULL,
+            PRIMARY KEY (user_id, route)
+        )
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS driver_reports (
@@ -345,6 +366,61 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+
+def check_api_rate_limit(
+    user_id: int,
+    route: str,
+    is_write: bool,
+    now: int | None = None,
+) -> int | None:
+    """Apply a per-user, per-route fixed-window limit; return retry seconds."""
+    current_time = int(time.time()) if now is None else now
+    limit = 20 if is_write else 120
+    window_seconds = 60
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO api_rate_limits (
+                    user_id, route, window_started_at, hits
+                )
+                VALUES (?, ?, ?, 1)
+                ON CONFLICT(user_id, route) DO UPDATE SET
+                    hits = CASE
+                        WHEN api_rate_limits.window_started_at <= ? THEN 1
+                        ELSE api_rate_limits.hits + 1
+                    END,
+                    window_started_at = CASE
+                        WHEN api_rate_limits.window_started_at <= ? THEN ?
+                        ELSE api_rate_limits.window_started_at
+                    END
+                """,
+                (
+                    user_id,
+                    route,
+                    current_time,
+                    current_time - window_seconds,
+                    current_time - window_seconds,
+                    current_time,
+                ),
+            )
+            row = conn.execute(
+                """
+                SELECT hits, window_started_at
+                FROM api_rate_limits
+                WHERE user_id = ? AND route = ?
+                """,
+                (user_id, route),
+            ).fetchone()
+            if current_time % 300 < 5:
+                conn.execute(
+                    "DELETE FROM api_rate_limits WHERE window_started_at < ?",
+                    (current_time - window_seconds * 2,),
+                )
+    if row[0] <= limit:
+        return None
+    return max(1, window_seconds - (current_time - row[1]))
 
 
 def get_subscription_access(user_id: int, now: int | None = None) -> Dict:
@@ -730,6 +806,8 @@ def add_work_shift(
     connectivity_cost: float = 0,
     distance_km: float = 0,
     orders_count: int = 0,
+    started_at: str | None = None,
+    vehicle_type: str = "",
 ) -> int:
     """Save a completed shift and return its row id."""
     now = get_moscow_time()
@@ -742,16 +820,17 @@ def add_work_shift(
                     fuel_cost, commission_cost, maintenance_cost, other_cost,
                     rental_cost, insurance_cost, tax_cost, depreciation_cost,
                     charging_cost, connectivity_cost, hours_worked, distance_km,
-                    orders_count, timestamp
+                    orders_count, started_at, vehicle_type, timestamp
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id, work_type, district, gross_income, tips,
                     fuel_cost, commission_cost, maintenance_cost, other_cost,
                     rental_cost, insurance_cost, tax_cost, depreciation_cost,
                     charging_cost, connectivity_cost, hours_worked, distance_km,
-                    orders_count, now.strftime("%Y-%m-%d %H:%M:%S"),
+                    orders_count, started_at, vehicle_type,
+                    now.strftime("%Y-%m-%d %H:%M:%S"),
                 ),
             )
             shift_id = cursor.lastrowid
@@ -1561,7 +1640,7 @@ def get_demand_forecast_inputs(
             SELECT district, gross_income, tips, fuel_cost, commission_cost,
                    maintenance_cost, other_cost, rental_cost, insurance_cost,
                    tax_cost, depreciation_cost, charging_cost, connectivity_cost,
-                   hours_worked, timestamp
+                   hours_worked, started_at, vehicle_type, timestamp
             FROM work_shifts
             WHERE user_id = ?
               AND work_type = ?
@@ -1819,7 +1898,7 @@ def export_user_data(user_id: int) -> Dict:
 def delete_user_data(user_id: int) -> None:
     """Erase application records owned by one user in a single transaction."""
     user_tables = (
-        "coefficients", "locations", "work_shifts", "driver_reports",
+        "coefficients", "locations", "work_shifts", "api_rate_limits", "driver_reports",
         "driver_profiles", "user_subscriptions", "payment_support_pending",
         "document_reminder_log", "telegram_star_payments",
         "notification_preferences",

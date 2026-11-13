@@ -119,6 +119,31 @@ async def _onboarded_user(request: web.Request) -> dict:
     return user
 
 
+@web.middleware
+async def api_rate_limit_middleware(
+    request: web.Request,
+    handler,
+) -> web.StreamResponse:
+    if not request.path.startswith("/api/") or request.path == "/api/map-config":
+        return await handler(request)
+
+    user = _authenticated_user(request)
+    resource = getattr(request.match_info.route, "resource", None)
+    route = getattr(resource, "canonical", request.path)
+    retry_after = await asyncio.to_thread(
+        database.check_api_rate_limit,
+        user["id"],
+        f"{request.method} {route}",
+        request.method in {"POST", "PUT", "PATCH", "DELETE"},
+    )
+    if retry_after is not None:
+        raise web.HTTPTooManyRequests(
+            text="Too many requests; try again shortly",
+            headers={"Retry-After": str(retry_after)},
+        )
+    return await handler(request)
+
+
 def _admin_user(request: web.Request) -> dict:
     user = _authenticated_user(request)
     if user["id"] not in config.ADMIN_IDS:
@@ -258,6 +283,7 @@ async def dashboard(request: web.Request) -> web.Response:
         forecast_inputs,
         live_factors,
         report_stats,
+        profile,
     ) = await asyncio.gather(
         asyncio.to_thread(
             database.get_work_summary,
@@ -277,7 +303,13 @@ async def dashboard(request: web.Request) -> web.Response:
             database.get_driver_report_district_stats,
             work_type,
         ),
+        asyncio.to_thread(
+            database.get_driver_profile,
+            user["id"],
+            work_type,
+        ),
     )
+    forecast_inputs["vehicle_type"] = profile.get("vehicle_type") or ""
     # Сообщения водителей превращаем в множитель к баллу (ТЗ, п. 9.2, 10, 14)
     live_factors["reports"] = crowd_signals.district_multipliers(
         report_stats, config.get_moscow_time()
@@ -296,11 +328,6 @@ async def dashboard(request: web.Request) -> web.Response:
     )
     await asyncio.to_thread(database.evaluate_forecast_snapshots)
     coefficient_stats = database.get_user_stats(user["id"])
-    profile = await asyncio.to_thread(
-        database.get_driver_profile,
-        user["id"],
-        work_type,
-    )
     weekly_summary = summary
     if period != "week":
         weekly_summary = await asyncio.to_thread(
@@ -379,6 +406,30 @@ async def submit_shift(request: web.Request) -> web.Response:
     ):
         raise web.HTTPBadRequest(text="orders_count must be an integer from 0 to 1000")
 
+    started_at_value = payload.get("started_at")
+    started_at = None
+    if started_at_value not in (None, ""):
+        if not isinstance(started_at_value, str):
+            raise web.HTTPBadRequest(text="started_at must be a local date and time")
+        try:
+            parsed_start = datetime.fromisoformat(started_at_value)
+        except ValueError:
+            raise web.HTTPBadRequest(text="started_at must be a local date and time")
+        if parsed_start.tzinfo is None:
+            parsed_start = parsed_start.replace(tzinfo=config.MOSCOW_TZ)
+        parsed_start = parsed_start.astimezone(config.MOSCOW_TZ)
+        now = config.get_moscow_time().replace(tzinfo=config.MOSCOW_TZ)
+        if parsed_start > now + timedelta(minutes=5):
+            raise web.HTTPBadRequest(text="started_at cannot be in the future")
+        if parsed_start < now - timedelta(days=180):
+            raise web.HTTPBadRequest(text="started_at cannot be older than 180 days")
+        started_at = parsed_start.strftime("%Y-%m-%d %H:%M:%S")
+
+    profile = await asyncio.to_thread(
+        database.get_driver_profile,
+        user["id"],
+        work_type,
+    )
     shift_id = await asyncio.to_thread(
         database.add_work_shift,
         user["id"],
@@ -399,6 +450,8 @@ async def submit_shift(request: web.Request) -> web.Response:
         connectivity_cost=amounts["connectivity_cost"],
         distance_km=distance_km,
         orders_count=orders_count,
+        started_at=started_at,
+        vehicle_type=profile.get("vehicle_type") or "",
     )
     return web.json_response({"saved": True, "shift_id": shift_id})
 
@@ -865,7 +918,7 @@ async def delete_personal_data(request: web.Request) -> web.Response:
 
 
 def create_app(payment_bot: Bot | None = None) -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[api_rate_limit_middleware])
     app[PAYMENT_BOT_KEY] = payment_bot
     app.router.add_get("/", index)
     app.router.add_static("/static/", path=STATIC_DIR)

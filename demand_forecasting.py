@@ -371,6 +371,28 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
     valid_districts = set(config.MOSCOW_DISTRICTS)
     recent_since = now - timedelta(days=COURIER_RECENT_DAYS)
     history_since = now - timedelta(days=COURIER_HISTORY_DAYS)
+    target_time = now + timedelta(minutes=60)
+    all_shifts = inputs.get("shifts", [])
+    selected_vehicle = inputs.get("vehicle_type") or ""
+    matching_shifts = [
+        shift for shift in all_shifts
+        if shift.get("vehicle_type") == selected_vehicle and selected_vehicle
+    ]
+    legacy_shifts = [
+        shift for shift in all_shifts if not shift.get("vehicle_type")
+    ]
+    if selected_vehicle and matching_shifts:
+        shifts = matching_shifts
+        transport_basis = "matched"
+    elif selected_vehicle and legacy_shifts:
+        shifts = legacy_shifts
+        transport_basis = "unspecified"
+    elif selected_vehicle:
+        shifts = []
+        transport_basis = "unavailable"
+    else:
+        shifts = all_shifts
+        transport_basis = "all"
 
     def period_totals():
         return {"income": 0.0, "hours": 0.0, "shifts": 0, "days": set()}
@@ -386,8 +408,9 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
         }
 
     totals_by_district = defaultdict(district_totals)
+    timed_totals_by_district = defaultdict(district_totals)
 
-    for shift in inputs.get("shifts", []):
+    for shift in shifts:
         district = shift.get("district")
         try:
             hours = float(shift.get("hours_worked") or 0)
@@ -406,7 +429,8 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             )
         except (TypeError, ValueError):
             continue
-        timestamp = _parse_timestamp(shift.get("timestamp"))
+        start_time = _parse_timestamp(shift.get("started_at"))
+        timestamp = start_time or _parse_timestamp(shift.get("timestamp"))
         if (
             district not in valid_districts
             or hours <= 0
@@ -426,23 +450,56 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
         period["shifts"] += 1
         period["days"].add(timestamp.date())
 
+        if start_time is not None:
+            hour_difference = abs(start_time.hour - target_time.hour)
+            hour_difference = min(hour_difference, 24 - hour_difference)
+            if (
+                start_time.weekday() == target_time.weekday()
+                and hour_difference <= 1
+            ):
+                timed = timed_totals_by_district[district]
+                timed["income"] += income
+                timed["hours"] += hours
+                timed["shifts"] += 1
+                timed["days"].add(start_time.date())
+
+    timed_sample_count = sum(
+        total["shifts"] for total in timed_totals_by_district.values()
+    )
+    timed_day_count = len({
+        day
+        for total in timed_totals_by_district.values()
+        for day in total["days"]
+    })
+    time_match_supported = timed_sample_count >= 3 and timed_day_count >= 2
+    ranking_totals = (
+        timed_totals_by_district if time_match_supported else totals_by_district
+    )
     rates = {
         district: total["income"] / total["hours"]
-        for district, total in totals_by_district.items()
+        for district, total in ranking_totals.items()
         if total["hours"] > 0
     }
     if not rates:
         baseline = _courier_poi_baseline(factors, now, inputs)
         if baseline is not None:
+            baseline["horizon_supported"] = False
+            baseline["transport_basis"] = transport_basis
+            baseline["transport_type"] = selected_vehicle or None
+            if transport_basis == "unavailable":
+                baseline["note"] += " В истории нет смен на выбранном транспорте."
             return baseline
         return {
             "work_type": "courier",
             "title": "Районы по вашей истории смен",
             "horizon_minutes": None,
+            "horizon_supported": False,
+            "transport_basis": transport_basis,
+            "transport_type": selected_vehicle or None,
             "status": "insufficient_data",
             "note": (
                 "Для персональной оценки нужны сохранённые курьерские смены "
-                "с районом и количеством отработанных часов."
+                "с районом, транспортом и количеством отработанных часов."
             ),
             "empty_message": (
                 "Пока нет подходящих смен. Указывай район и часы при сохранении "
@@ -454,23 +511,27 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
 
     comparison_rates = {
         district: (
-            total["recent"]["income"] / total["recent"]["hours"]
-            if total["recent"]["hours"] > 0 else rates[district]
+            totals_by_district[district]["recent"]["income"]
+            / totals_by_district[district]["recent"]["hours"]
+            if totals_by_district[district]["recent"]["hours"] > 0
+            and not time_match_supported
+            else rates[district]
         )
-        for district, total in totals_by_district.items()
+        for district in ranking_totals
     }
     minimum_rate = min(comparison_rates.values())
     maximum_rate = max(comparison_rates.values())
     items = []
     for district, rate in comparison_rates.items():
-        total = totals_by_district[district]
+        total = ranking_totals[district]
+        trend_total = totals_by_district[district]
         recent_rate = (
-            total["recent"]["income"] / total["recent"]["hours"]
-            if total["recent"]["hours"] > 0 else None
+            trend_total["recent"]["income"] / trend_total["recent"]["hours"]
+            if trend_total["recent"]["hours"] > 0 else None
         )
         historical_rate = (
-            total["historical"]["income"] / total["historical"]["hours"]
-            if total["historical"]["hours"] > 0 else None
+            trend_total["historical"]["income"] / trend_total["historical"]["hours"]
+            if trend_total["historical"]["hours"] > 0 else None
         )
         change = (
             recent_rate - historical_rate
@@ -508,8 +569,8 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             "confidence": confidence,
             "trend": trend,
             "sample_count": total["shifts"],
-            "recent_samples": total["recent"]["shifts"],
-            "historical_samples": total["historical"]["shifts"],
+            "recent_samples": trend_total["recent"]["shifts"],
+            "historical_samples": trend_total["historical"]["shifts"],
             "net_income_per_hour": round(rate, 2),
             "historical_net_income_per_hour": (
                 round(historical_rate, 2) if historical_rate is not None else None
@@ -536,6 +597,28 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
         if any(item.get("method") == "poi_baseline" for item in items)
         else ""
     )
+    transport_name = {
+        "foot": "пешком",
+        "bicycle": "велосипед",
+        "scooter": "самокат",
+        "motorcycle": "мотоцикл",
+        "car": "автомобиль",
+    }.get(selected_vehicle, selected_vehicle)
+    transport_suffix = (
+        f" Учтены смены на транспорте «{transport_name}»."
+        if transport_basis == "matched" and transport_name
+        else " В части истории транспорт не указан, поэтому эти смены нельзя разделить по типу."
+        if transport_basis == "unspecified"
+        else " В истории нет смен на выбранном транспорте."
+        if transport_basis == "unavailable"
+        else ""
+    )
+    time_suffix = (
+        " Для рейтинга учтены смены, начатые в похожие день недели и час."
+        if time_match_supported
+        else " Для сравнения времени начала смен пока недостаточно наблюдений; "
+        "использована вся доступная история."
+    )
     weather_suffix = (
         f" Погода учтена: {weather_label}."
         if weather_label
@@ -550,14 +633,16 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             else "Районы по вашей истории смен"
         ),
         "horizon_minutes": None,
+        "horizon_supported": time_match_supported,
+        "transport_basis": transport_basis,
+        "transport_type": selected_vehicle or None,
         "status": "available" if total_shifts >= 3 else "limited",
         "note": (
             "Балл сравнивает районы по вашей истории чистого дохода за час за "
             "последние 90 дней. Динамика сравнивает последние 45 дней с предыдущими "
-            "45; это не прогноз числа заказов и не учитывает "
-            "время начала смен и тип транспорта. Учтены погода и сообщения "
+            "45; это не прогноз числа заказов. Учтены погода и сообщения "
             "курьеров об обстановке."
-            + weather_suffix + blend_suffix
+            + transport_suffix + time_suffix + weather_suffix + blend_suffix
         ),
         "empty_message": "Нет сохранённых смен с районом и часами работы.",
         "hints": _courier_hints(inputs),

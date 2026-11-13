@@ -176,6 +176,8 @@ h3 { margin: 0; font-size: 15px; }
 .map-heading .eyebrow { margin-bottom: 4px; }
 .map-heading h3 { font-size: 14px; }
 .map-badge { padding: 6px 8px; border-radius: 10px; background: rgba(124, 224, 177, .1); color: var(--mint); font-size: 9px; font-weight: 750; white-space: nowrap; }
+.map-layer-control { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; color: var(--muted); font-size: 10px; }
+.map-layer-control select { width: auto; min-width: 150px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); color: var(--text); font: inherit; }
 #coefficient-map { height: 330px; overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: #dce5df; touch-action: none; overscroll-behavior: contain; }
 .map-attribution { margin: 9px 0 0; color: var(--muted); font-size: 8px; line-height: 1.4; }
 .map-card .form-message { margin-top: 5px; }
