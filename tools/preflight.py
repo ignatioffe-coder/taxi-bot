@@ -44,7 +44,7 @@ def check_token() -> tuple[str, str]:
 
 
 def check_webapp_url() -> tuple[str, str]:
-    import config  # noqa: PLC0415
+    import config
 
     url = (getattr(config, "WEBAPP_URL", "") or "").strip()
     if not url:
@@ -55,7 +55,7 @@ def check_webapp_url() -> tuple[str, str]:
 
 
 def check_maps_key() -> tuple[str, str]:
-    import config  # noqa: PLC0415
+    import config
 
     key = (getattr(config, "YANDEX_MAPS_API_KEY", "") or "").strip()
     if not key:
@@ -64,14 +64,14 @@ def check_maps_key() -> tuple[str, str]:
 
 
 def check_database() -> tuple[str, str]:
-    import database  # noqa: PLC0415
-    import config  # noqa: PLC0415
+    import config
+    import database
 
     database.init_db()
     path = Path(config.DB_PATH)
     if not path.exists():
         return "FAIL", f"файл базы не создан: {path}"
-    import sqlite3  # noqa: PLC0415
+    import sqlite3
 
     with sqlite3.connect(config.DB_PATH) as conn:
         tables = {
@@ -118,19 +118,19 @@ def check_data() -> tuple[str, str]:
         return "FAIL", f"центров районов всего {len(districts)}"
     if len(poi_districts) < 100:
         return "WARN", "плотность заведений покрывает мало районов: курьерский прогноз будет слабым"
-    return (
-        "OK",
+    detail = (
         f"{len(districts)} районов, плотность по {len(poi_districts)}, "
-        f"событий: {len(events.get('events') or [])}",
+        f"событий: {len(events.get('events') or [])}"
     )
+    return "OK", detail
 
 
 def check_forecast() -> tuple[str, str]:
-    from datetime import timedelta  # noqa: PLC0415
+    from datetime import timedelta
 
-    import config  # noqa: PLC0415
-    import demand_forecasting  # noqa: PLC0415
-    import external_factors  # noqa: PLC0415
+    import config
+    import demand_forecasting
+    import external_factors
 
     now = config.get_moscow_time()
     factors = external_factors.load_live_factors(now)
@@ -153,15 +153,15 @@ def check_forecast() -> tuple[str, str]:
     if not taxi["items"]:
         return "FAIL", "такси-прогноз не построился даже на тестовом коэффициенте"
     used = [name for name, value in (taxi.get("factors") or {}).items() if value]
-    return (
-        "OK",
+    detail = (
         f"такси {len(taxi['items'])} района, курьер {len(courier['items'])}; "
-        f"факторы: {', '.join(used) if used else 'нет внешних'}",
+        f"факторы: {', '.join(used) if used else 'нет внешних'}"
     )
+    return "OK", detail
 
 
 def check_notifications() -> tuple[str, str]:
-    import notifications  # noqa: PLC0415
+    import notifications
 
     inside = notifications.in_quiet_hours(
         notifications.datetime(2026, 1, 1, 23, 0), "22:00", "08:00"
@@ -172,7 +172,7 @@ def check_notifications() -> tuple[str, str]:
 
 
 def check_admin() -> tuple[str, str]:
-    import database  # noqa: PLC0415
+    import database
 
     summary = database.get_admin_summary()
     for field in ("forecast_quality", "district_coverage", "forecast_quality_by_district"):
