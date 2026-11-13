@@ -124,5 +124,66 @@ class CollectTests(unittest.TestCase):
         self.assertEqual([kind for kind, _ in messages], ["weather"])
 
 
+class TrafficMessageTests(unittest.TestCase):
+    NOW = datetime(2026, 1, 7, 12, 0)
+
+    def _stats(self, categories, age_minutes=5):
+        return {
+            "Тверской": {
+                "report_count": 2,
+                "reporters": 2,
+                "report_categories": list(categories),
+                "last_report_update": (
+                    self.NOW - timedelta(minutes=age_minutes)
+                ).strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        }
+
+    def test_fresh_traffic_report_is_mentioned(self):
+        text = notifications.build_traffic_message(self._stats(["traffic"]), self.NOW)
+        self.assertIn("пробки", text)
+        self.assertIn("Тверской", text)
+
+    def test_accident_and_closure_have_human_labels(self):
+        text = notifications.build_traffic_message(
+            self._stats(["accident", "road_closure"]), self.NOW
+        )
+        self.assertIn("ДТП", text)
+        self.assertIn("перекрытие", text)
+
+    def test_old_report_is_not_mentioned(self):
+        self.assertIsNone(
+            notifications.build_traffic_message(
+                self._stats(["traffic"], age_minutes=60 * 5), self.NOW
+            )
+        )
+
+    def test_non_traffic_categories_are_ignored(self):
+        self.assertIsNone(
+            notifications.build_traffic_message(self._stats(["high_demand"]), self.NOW)
+        )
+
+    def test_empty_stats_are_safe(self):
+        self.assertIsNone(notifications.build_traffic_message({}, self.NOW))
+        self.assertIsNone(notifications.build_traffic_message(None, self.NOW))
+
+    def test_traffic_flag_produces_traffic_message(self):
+        recipient = {"work_type": "taxi", "demand_changes": False,
+                     "promising_areas": False, "weather_changes": False,
+                     "traffic_events": True}
+        forecast = {"items": []}
+        messages = notifications.collect_messages(
+            recipient, forecast, None, self._stats(["traffic"]), self.NOW
+        )
+        self.assertEqual([kind for kind, _ in messages], ["traffic"])
+
+    def test_without_now_no_traffic_message(self):
+        recipient = {"work_type": "taxi", "traffic_events": True}
+        messages = notifications.collect_messages(
+            recipient, {"items": []}, None, self._stats(["traffic"])
+        )
+        self.assertEqual(messages, [])
+
+
 if __name__ == "__main__":
     unittest.main()

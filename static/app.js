@@ -1173,7 +1173,9 @@
       "demand_changes", "promising_areas", "weather_changes", "city_events",
       "traffic_events", "personal_recommendations", "financial_reminders",
     ].forEach((field) => {
-      notificationForm.elements[field].checked = Boolean(notifications[field]);
+      const input = notificationForm.elements[field];
+      // Отключённые пункты («скоро») всегда сохраняются как выключенные
+      input.checked = input.disabled ? false : Boolean(notifications[field]);
     });
     notificationForm.elements.frequency.value = notifications.frequency || "daily";
     notificationForm.elements.quiet_start.value = notifications.quiet_start || "";

@@ -15,6 +15,7 @@ import logging
 from datetime import datetime, timedelta
 
 import config
+import crowd_signals
 import database
 import demand_forecasting
 import external_factors
@@ -28,7 +29,18 @@ FREQUENCY_MINUTES = {"immediate": 15, "hourly": 60, "daily": 1440}
 KIND_PREFERENCES = {
     "demand": ("demand_changes", "promising_areas"),
     "weather": ("weather_changes",),
+    "traffic": ("traffic_events",),
 }
+
+# Сообщения о дорожной обстановке (ТЗ, п. 14)
+TRAFFIC_CATEGORIES = {"traffic", "accident", "road_closure"}
+TRAFFIC_LABELS = {
+    "traffic": "пробки",
+    "accident": "ДТП",
+    "road_closure": "перекрытие",
+}
+TRAFFIC_MIN_FRESHNESS = 0.4
+TRAFFIC_MAX_HIGHLIGHTS = 3
 
 # Порог, ниже которого район не упоминаем
 MIN_SCORE = 60
@@ -128,7 +140,38 @@ def build_weather_message(work_type: str, weather: dict | None) -> str | None:
     )
 
 
-def collect_messages(recipient: dict, forecast: dict, weather: dict | None) -> list[tuple[str, str]]:
+def build_traffic_message(report_stats: dict | None, now: datetime) -> str | None:
+    """Свежие сообщения о пробках, ДТП и перекрытиях (ТЗ, п. 14, 16)."""
+    highlights: list[str] = []
+    for district, row in (report_stats or {}).items():
+        categories = [
+            category for category in (row.get("report_categories") or [])
+            if category in TRAFFIC_CATEGORIES
+        ]
+        if not categories:
+            continue
+        if crowd_signals.freshness(row.get("last_report_update"), now) < TRAFFIC_MIN_FRESHNESS:
+            continue
+        labels = ", ".join(TRAFFIC_LABELS[category] for category in categories)
+        highlights.append(f"{district} — {labels}")
+        if len(highlights) >= TRAFFIC_MAX_HIGHLIGHTS:
+            break
+
+    if not highlights:
+        return None
+    return (
+        "🚗 Дорожная обстановка: " + "; ".join(highlights) + ". "
+        "Учти при выборе маршрута и времени выхода."
+    )
+
+
+def collect_messages(
+    recipient: dict,
+    forecast: dict,
+    weather: dict | None,
+    report_stats: dict | None = None,
+    now: datetime | None = None,
+) -> list[tuple[str, str]]:
     """Что и в каком виде отправлять этому пользователю с учётом его настроек."""
     work_type = recipient.get("work_type") or "taxi"
     messages: list[tuple[str, str]] = []
@@ -143,6 +186,11 @@ def collect_messages(recipient: dict, forecast: dict, weather: dict | None) -> l
         if text:
             messages.append(("weather", text))
 
+    if recipient.get("traffic_events") and now is not None:
+        text = build_traffic_message(report_stats, now)
+        if text:
+            messages.append(("traffic", text))
+
     return messages
 
 
@@ -152,6 +200,8 @@ async def send_due_notifications(bot) -> int:
     factors = await asyncio.to_thread(external_factors.load_live_factors)
     weather = factors.get("weather")
     recipients = await asyncio.to_thread(database.get_notification_recipients)
+    # Свежие сообщения о дорожной обстановке считаем один раз на направление
+    report_stats_cache: dict[str, dict] = {}
     sent = 0
 
     for recipient in recipients:
@@ -174,7 +224,16 @@ async def send_due_notifications(bot) -> int:
             )
             continue
 
-        for kind, text in collect_messages(recipient, forecast, weather):
+        if recipient.get("traffic_events"):
+            if work_type not in report_stats_cache:
+                report_stats_cache[work_type] = await asyncio.to_thread(
+                    database.get_driver_report_district_stats, work_type
+                )
+        report_stats = report_stats_cache.get(work_type)
+
+        for kind, text in collect_messages(
+            recipient, forecast, weather, report_stats, now
+        ):
             last_raw = await asyncio.to_thread(
                 database.get_last_notification_at, recipient["user_id"], kind
             )

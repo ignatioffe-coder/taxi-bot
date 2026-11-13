@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#11151b">
   <title>MOVENTA</title>
-  <link rel="stylesheet" href="/static/styles.css?v=28">
+  <link rel="stylesheet" href="/static/styles.css?v=29">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/static/app.js?v=28" defer></script>
+  <script src="/static/app.js?v=29" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -272,12 +272,12 @@
       </form>
       <section class="notification-card">
         <div class="section-heading"><div><p class="eyebrow">УВЕДОМЛЕНИЯ</p><h3>Что присылать</h3></div></div>
-        <p>Настройки сохраняются в профиле. Сейчас доступны напоминания о документах; оповещения о спросе, погоде, мероприятиях и дорогах не отправляются, пока не подключены проверенные источники.</p>
+        <p>Присылаем, когда спрос растёт, начинается непогода или появились сообщения о пробках и ДТП. Настройки сохраняются в профиле, «тихие часы» и частота соблюдаются.</p>
         <form id="notification-form" class="notification-form">
           <label class="notification-option"><span>Изменения спроса</span><input type="checkbox" name="demand_changes"></label>
           <label class="notification-option"><span>Перспективные районы</span><input type="checkbox" name="promising_areas"></label>
           <label class="notification-option"><span>Погода</span><input type="checkbox" name="weather_changes"></label>
-          <label class="notification-option"><span>Мероприятия</span><input type="checkbox" name="city_events"></label>
+          <label class="notification-option"><span>Мероприятия <span class="optional">скоро</span></span><input type="checkbox" name="city_events" disabled></label>
           <label class="notification-option"><span>Дорожные события</span><input type="checkbox" name="traffic_events"></label>
           <label class="notification-option"><span>Персональные рекомендации</span><input type="checkbox" name="personal_recommendations"></label>
           <label class="notification-option"><span>Напоминания о документах</span><input type="checkbox" name="financial_reminders"></label>
