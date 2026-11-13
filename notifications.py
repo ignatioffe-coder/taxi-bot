@@ -186,7 +186,7 @@ def collect_messages(
         if text:
             messages.append(("weather", text))
 
-    if recipient.get("traffic_events") and now is not None:
+    if any(recipient.get(field) for field in KIND_PREFERENCES["traffic"]) and now:
         text = build_traffic_message(report_stats, now)
         if text:
             messages.append(("traffic", text))
@@ -224,11 +224,10 @@ async def send_due_notifications(bot) -> int:
             )
             continue
 
-        if recipient.get("traffic_events"):
-            if work_type not in report_stats_cache:
-                report_stats_cache[work_type] = await asyncio.to_thread(
-                    database.get_driver_report_district_stats, work_type
-                )
+        if recipient.get("traffic_events") and work_type not in report_stats_cache:
+            report_stats_cache[work_type] = await asyncio.to_thread(
+                database.get_driver_report_district_stats, work_type
+            )
         report_stats = report_stats_cache.get(work_type)
 
         for kind, text in collect_messages(

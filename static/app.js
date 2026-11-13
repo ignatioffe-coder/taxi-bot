@@ -130,7 +130,7 @@
     if (error.status === 402) return;
     if (error.status === 401) {
       showToast(hasTelegramAuth
-        ? "Telegram не смог подтвердить сессию. Проверь BOT_TOKEN в BotHost и перезапусти бота."
+        ? "Не удалось подтвердить вход. Закрой приложение и открой его заново — если не поможет, напиши в поддержку через /paysupport."
         : "Telegram не передал данные. Отправь боту /start и открой Mini App кнопкой под новым сообщением.");
     } else {
       showToast(error.message || "Не удалось выполнить запрос. Попробуй ещё раз.");
