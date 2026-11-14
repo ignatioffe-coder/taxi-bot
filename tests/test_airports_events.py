@@ -98,7 +98,16 @@ class EventImpactTests(unittest.TestCase):
             broken.unlink(missing_ok=True)
 
     def test_real_events_file_is_valid(self):
-        self.assertIsInstance(events.load_events(), list)
+        seeded_events = events.load_events()
+        self.assertGreater(len(seeded_events), 0)
+        for event in seeded_events:
+            self.assertTrue(event["source_url"])
+            self.assertTrue(event["venue_source_url"])
+            self.assertTrue(event["location_source_url"])
+            self.assertTrue(event["source_checked_at"])
+            self.assertEqual(event["attendance_confidence"], "low")
+            self.assertLessEqual(event["attendance_min"], event["attendance"])
+            self.assertLessEqual(event["attendance"], event["attendance_max"])
 
 
 class LocationFactorIntegrationTests(unittest.TestCase):

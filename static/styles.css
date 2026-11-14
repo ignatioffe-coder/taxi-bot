@@ -212,7 +212,7 @@ h3 { margin: 0; font-size: 15px; }
 .data-form textarea { width: 100%; min-width: 0; resize: vertical; padding: 11px; border: 1px solid var(--line); border-radius: 11px; outline: none; background: var(--surface-raised); color: var(--text); font-size: 11px; line-height: 1.45; }
 .data-form textarea::placeholder { color: #65717e; }
 .data-form input:focus, .data-form select:focus, .data-form textarea:focus { border-color: rgba(255, 191, 85, .55); }
-.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.form-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .field { min-width: 0; }
 .number-wrap { position: relative; }
 .number-wrap input { padding-right: 32px; }
@@ -270,10 +270,12 @@ h3 { margin: 0; font-size: 15px; }
 .profile-form { gap: 10px; }
 .notification-card { margin-top: 13px; padding: 13px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
 .notification-card > p:not(.form-message) { color: var(--muted); font-size: 9px; line-height: 1.5; }
-.notification-form { display: grid; gap: 8px; }
+.notification-form { display: grid; min-width: 0; gap: 8px; }
+.notification-form > *, .notification-form .form-row { min-width: 0; }
 .notification-option { display: flex; min-height: 38px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px; border-radius: 10px; background: var(--surface-raised); color: var(--text); font-size: 10px; }
+.notification-option > span { min-width: 0; overflow-wrap: anywhere; }
 .notification-option input { width: 18px; height: 18px; flex: 0 0 auto; margin: 0; accent-color: var(--mint); }
-.notification-form input[type=time], .notification-form select { width: 100%; min-width: 0; height: 43px; padding: 0 11px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-raised); color: var(--text); font-size: 11px; }
+.notification-form input[type=time], .notification-form select { width: 100%; min-width: 0; max-width: 100%; height: 43px; padding: 0 11px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-raised); color: var(--text); font-size: 11px; }
 .profile-subscription-card { margin-bottom: 13px; padding: 14px; border: 1px solid rgba(255, 191, 85, .17); border-radius: 16px; background: linear-gradient(120deg, rgba(255, 191, 85, .07), var(--surface)); }
 .profile-subscription-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .profile-subscription-heading .eyebrow { margin-bottom: 4px; }
@@ -324,6 +326,9 @@ h3 { margin: 0; font-size: 15px; }
   .metric-card { padding: 15px; }
   .recommendations { grid-template-columns: 1fr 1fr; }
   #coefficient-map { height: 390px; }
+}
+@media (max-width: 420px) {
+  .notification-form .form-row { grid-template-columns: minmax(0, 1fr); }
 }
 .admin-quality-districts { margin-top: 10px; }
 .admin-quality-line { margin: 4px 0 0; color: var(--muted); font-size: 10px; }

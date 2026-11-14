@@ -278,6 +278,7 @@ class LiveFactorsTests(unittest.TestCase):
         factors = external_factors.load_live_factors()
         self.assertIn("weather", factors)
         self.assertIn("poi_density", factors)
+        self.assertIn("traffic", factors)
         self.assertIsInstance(factors["poi_density"], dict)
 
     def test_real_density_snapshot_covers_moscow_districts(self):

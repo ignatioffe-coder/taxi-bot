@@ -426,12 +426,13 @@
       coefficientMap.behaviors.enable(["drag", "multiTouch"]);
     }
   }
-  mapContainer.addEventListener("touchend", restoreCoefficientMapGestures, {
-    passive: true,
-  });
-  mapContainer.addEventListener("touchcancel", restoreCoefficientMapGestures, {
-    passive: true,
-  });
+  ["touchstart", "touchend", "touchcancel", "pointerdown", "pointerup", "pointercancel"]
+    .forEach((eventName) => {
+      mapContainer.addEventListener(eventName, restoreCoefficientMapGestures, {
+        capture: true,
+        passive: true,
+      });
+    });
   if (typeof ResizeObserver !== "undefined") {
     const mapResizeObserver = new ResizeObserver(fitCoefficientMapToViewportIfResized);
     mapResizeObserver.observe(mapContainer);
@@ -564,12 +565,16 @@
       })),
     }));
     const container = $("district-groups");
+    const openGroups = new Set(
+      Array.from(container.querySelectorAll(".district-group[open] .okrug-title"))
+        .map((title) => title.textContent),
+    );
     container.replaceChildren();
 
     districtGroups.forEach((group) => {
       const details = document.createElement("details");
       details.className = "district-group";
-      details.open = group.name === "Центральный округ";
+      details.open = openGroups.has(group.name);
 
       const summary = document.createElement("summary");
       const title = document.createElement("span");
@@ -1038,6 +1043,7 @@
       poi_density: "плотность заведений",
       airports: "аэропорты",
       events: "мероприятия",
+      traffic: "пробки TomTom",
       reports: "сообщения водителей",
     };
     const factors = forecast.factors || {};
@@ -1055,7 +1061,8 @@
       : "Внешние данные сейчас недоступны, оценка построена по вашей истории.";
     const second = document.createElement("p");
     second.textContent = "Балл 0–100 сравнивает районы между собой, это не число заказов. " +
-      "60 минут — основная оценка, 30 и 120 показывают ожидаемый сдвиг по типичному профилю суток.";
+      "60 минут — основная оценка, 30 и 120 показывают ожидаемый сдвиг по типичному профилю суток. " +
+      "Пробки TomTom отражают дорожную обстановку, а не наблюдаемое число заказов.";
     block.append(summary, first, second);
     return block;
   }
