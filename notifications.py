@@ -80,6 +80,18 @@ def in_quiet_hours(now: datetime, quiet_start: str | None, quiet_end: str | None
     return current >= start or current < end
 
 
+def in_working_hours(now: datetime, work_start: str | None, work_end: str | None) -> bool:
+    """Whether courier notifications fall in the configured work window."""
+    start = _clock_minutes(work_start)
+    end = _clock_minutes(work_end)
+    if start is None or end is None or start == end:
+        return True
+    current = now.hour * 60 + now.minute
+    if start < end:
+        return start <= current < end
+    return current >= start or current < end
+
+
 def is_due(frequency: str | None, now: datetime, last_sent_at: datetime | None) -> bool:
     """Пора ли отправлять, если учитывать частоту."""
     if last_sent_at is None:
@@ -99,10 +111,19 @@ def _parse_datetime(value) -> datetime | None:
         return None
 
 
-def build_demand_message(work_type: str, forecast: dict) -> str | None:
+def build_demand_message(
+    work_type: str,
+    forecast: dict,
+    watched_districts: list[str] | None = None,
+) -> str | None:
     """Короткое сообщение о перспективных районах. None, если хвастаться нечем."""
     items = forecast.get("items") or []
-    leaders = [item for item in items if int(item.get("score") or 0) >= MIN_SCORE]
+    watched = set(watched_districts or [])
+    leaders = [
+        item for item in items
+        if int(item.get("score") or 0) >= MIN_SCORE
+        and (not watched or item.get("district") in watched)
+    ]
     if not leaders:
         return None
 
@@ -140,17 +161,29 @@ def build_weather_message(work_type: str, weather: dict | None) -> str | None:
     )
 
 
-def build_traffic_message(report_stats: dict | None, now: datetime) -> str | None:
+def build_traffic_message(
+    report_stats: dict | None,
+    now: datetime,
+    watched_districts: list[str] | None = None,
+) -> str | None:
     """Свежие сообщения о пробках, ДТП и перекрытиях (ТЗ, п. 14, 16)."""
     highlights: list[str] = []
+    watched = set(watched_districts or [])
     for district, row in (report_stats or {}).items():
-        categories = [
-            category for category in (row.get("report_categories") or [])
-            if category in TRAFFIC_CATEGORIES
-        ]
-        if not categories:
+        if watched and district not in watched:
             continue
-        if crowd_signals.freshness(row.get("last_report_update"), now) < TRAFFIC_MIN_FRESHNESS:
+        category_details = row.get("category_details") or {}
+        categories = []
+        for category in row.get("report_categories") or []:
+            if category not in TRAFFIC_CATEGORIES:
+                continue
+            detail = category_details.get(category) or row
+            updated = detail.get("last_report_update") or row.get(
+                "last_report_update"
+            )
+            if crowd_signals.freshness(updated, now) >= TRAFFIC_MIN_FRESHNESS:
+                categories.append(category)
+        if not categories:
             continue
         labels = ", ".join(TRAFFIC_LABELS[category] for category in categories)
         highlights.append(f"{district} — {labels}")
@@ -174,10 +207,14 @@ def collect_messages(
 ) -> list[tuple[str, str]]:
     """Что и в каком виде отправлять этому пользователю с учётом его настроек."""
     work_type = recipient.get("work_type") or "taxi"
+    watched_districts = (
+        recipient.get("watched_districts") or []
+        if work_type == "courier" else []
+    )
     messages: list[tuple[str, str]] = []
 
     if any(recipient.get(field) for field in KIND_PREFERENCES["demand"]):
-        text = build_demand_message(work_type, forecast)
+        text = build_demand_message(work_type, forecast, watched_districts)
         if text:
             messages.append(("demand", text))
 
@@ -187,7 +224,7 @@ def collect_messages(
             messages.append(("weather", text))
 
     if any(recipient.get(field) for field in KIND_PREFERENCES["traffic"]) and now:
-        text = build_traffic_message(report_stats, now)
+        text = build_traffic_message(report_stats, now, watched_districts)
         if text:
             messages.append(("traffic", text))
 
@@ -208,6 +245,10 @@ async def send_due_notifications(bot) -> int:
         if in_quiet_hours(now, recipient.get("quiet_start"), recipient.get("quiet_end")):
             continue
         work_type = recipient.get("work_type") or "taxi"
+        if work_type == "courier" and not in_working_hours(
+            now, recipient.get("work_start"), recipient.get("work_end")
+        ):
+            continue
         try:
             inputs = await asyncio.to_thread(
                 database.get_demand_forecast_inputs,

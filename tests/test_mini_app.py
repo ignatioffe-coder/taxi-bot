@@ -239,6 +239,46 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             expected_status = 429 if index == len(categories) else 200
             self.assertEqual(limited.status, expected_status)
 
+    async def test_pickup_delay_reports_are_courier_only_private_and_expire(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers, work_type="courier")
+        district = config.MOSCOW_DISTRICTS[0]
+        payload = {
+            "work_type": "courier",
+            "category": "pickup_delay",
+            "district": district,
+            "details": "Очередь на выдаче",
+        }
+        response = await self.client.post(
+            "/api/reports", headers=headers, json=payload
+        )
+        self.assertEqual(response.status, 200)
+        import database
+
+        database.add_driver_report(
+            987654, "courier", "pickup_delay", district, "Подтверждаю"
+        )
+        public = database.get_active_driver_reports("courier")
+        self.assertEqual(public[0]["confidence"], "corroborated")
+        self.assertNotIn("user_id", public[0])
+        stats = database.get_driver_report_district_stats("courier")
+        self.assertEqual(
+            stats[district]["category_details"]["pickup_delay"]["reporters"], 2
+        )
+        self.assertEqual(
+            stats[district]["category_details"]["pickup_delay"]["recent_reporters"],
+            2,
+        )
+        later = database.get_moscow_time() + timedelta(minutes=46)
+        self.assertEqual(
+            database.get_driver_report_district_stats("courier", now=later), {}
+        )
+        taxi_payload = {**payload, "work_type": "taxi"}
+        invalid = await self.client.post(
+            "/api/reports", headers=headers, json=taxi_payload
+        )
+        self.assertEqual(invalid.status, 400)
+
     async def test_driver_reports_are_corroborated_and_admin_can_moderate(self):
         headers = {"X-Telegram-Init-Data": self.init_data}
         await self.complete_onboarding(headers)
@@ -941,6 +981,9 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             "frequency": "hourly",
             "quiet_start": "22:00",
             "quiet_end": "07:00",
+            "watched_districts": [config.MOSCOW_DISTRICTS[0]],
+            "work_start": "08:00",
+            "work_end": "20:00",
         }
         response = await self.client.put(
             "/api/notifications/preferences",
@@ -953,6 +996,37 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         ).json()
         self.assertFalse(saved["notifications"]["financial_reminders"])
         self.assertEqual(saved["notifications"]["frequency"], "hourly")
+        self.assertEqual(
+            saved["notifications"]["watched_districts"],
+            [config.MOSCOW_DISTRICTS[0]],
+        )
+        self.assertEqual(saved["notifications"]["work_start"], "08:00")
+        import database
+
+        recipient = next(
+            item for item in database.get_notification_recipients()
+            if item["user_id"] == 123456 and item["work_type"] == "taxi"
+        )
+        self.assertEqual(
+            recipient["watched_districts"], [config.MOSCOW_DISTRICTS[0]]
+        )
+        legacy_payload = {
+            key: value for key, value in payload.items()
+            if key not in {"watched_districts", "work_start", "work_end"}
+        }
+        legacy_response = await self.client.put(
+            "/api/notifications/preferences",
+            headers=headers,
+            json=legacy_payload,
+        )
+        self.assertEqual(legacy_response.status, 200)
+        preserved = await (
+            await self.client.get("/api/profile", headers=headers)
+        ).json()
+        self.assertEqual(
+            preserved["notifications"]["watched_districts"],
+            [config.MOSCOW_DISTRICTS[0]],
+        )
         self.assertEqual(
             database.get_due_document_reminders(database.get_moscow_time().date()),
             [],
@@ -970,6 +1044,45 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             json={**payload, "financial_reminders": "no"},
         )
         self.assertEqual(invalid_boolean.status, 400)
+        invalid_district = await self.client.put(
+            "/api/notifications/preferences",
+            headers=headers,
+            json={**payload, "watched_districts": ["Unknown"]},
+        )
+        self.assertEqual(invalid_district.status, 400)
+        invalid_hours = await self.client.put(
+            "/api/notifications/preferences",
+            headers=headers,
+            json={**payload, "work_end": ""},
+        )
+        self.assertEqual(invalid_hours.status, 400)
+
+    async def test_notification_preferences_migrate_legacy_sqlite_schema(self):
+        import database
+
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            with conn:
+                conn.execute("DROP TABLE notification_preferences")
+                conn.execute("""
+                    CREATE TABLE notification_preferences (
+                        user_id INTEGER PRIMARY KEY,
+                        demand_changes INTEGER NOT NULL DEFAULT 1,
+                        promising_areas INTEGER NOT NULL DEFAULT 1,
+                        weather_changes INTEGER NOT NULL DEFAULT 1,
+                        city_events INTEGER NOT NULL DEFAULT 1,
+                        traffic_events INTEGER NOT NULL DEFAULT 1,
+                        personal_recommendations INTEGER NOT NULL DEFAULT 1,
+                        financial_reminders INTEGER NOT NULL DEFAULT 1,
+                        frequency TEXT NOT NULL DEFAULT 'daily',
+                        quiet_start TEXT NOT NULL DEFAULT '',
+                        quiet_end TEXT NOT NULL DEFAULT ''
+                    )
+                """)
+        database.init_db()
+        preferences = database.get_notification_preferences(123456)
+        self.assertEqual(preferences["watched_districts"], [])
+        self.assertEqual(preferences["work_start"], "")
+        self.assertEqual(preferences["work_end"], "")
 
     async def test_weather_endpoint_marks_real_source_status(self):
         headers = {"X-Telegram-Init-Data": self.init_data}
@@ -1201,9 +1314,15 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             "/api/dashboard?work_type=courier&period=week",
             headers=headers,
         )
-        forecast = (await dashboard_response.json())["forecast"]
+        dashboard_data = await dashboard_response.json()
+        forecast = dashboard_data["forecast"]
         self.assertEqual(forecast["transport_basis"], "matched")
         self.assertEqual(forecast["transport_type"], "bicycle")
+        summary = dashboard_data["summary"]
+        insights = summary["courier_insights"]
+        self.assertEqual(insights["recorded_net_per_hour"], 300)
+        self.assertEqual(insights["orders_per_hour"], 0)
+        self.assertIsNone(insights["recorded_net_per_order"])
 
     async def test_legacy_shift_schema_adds_forecast_fields(self):
         import database

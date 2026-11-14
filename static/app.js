@@ -17,6 +17,7 @@
     many_couriers: "Курьеров больше спроса",
     long_wait: "Долгое ожидание",
     restaurant_busy: "Задержка в ресторане",
+    pickup_delay: "Ожидание при получении",
     order_problem: "Проблема с заказом",
     delivery_problem: "Проблема с доставкой",
     traffic: "Пробка",
@@ -31,7 +32,7 @@
     courier: [
       "high_demand", "low_activity", "many_orders", "long_wait",
       "few_couriers", "many_couriers",
-      "restaurant_busy", "order_problem", "delivery_problem",
+      "restaurant_busy", "pickup_delay", "order_problem", "delivery_problem",
       "traffic", "accident", "road_closure",
     ],
   };
@@ -53,6 +54,7 @@
   let coefficientMapViewportSize = "";
   let preferredName = "";
   let currentSubscription = null;
+  let watchedDistricts = [];
   let paymentInProgress = false;
 
   if (tg) {
@@ -216,6 +218,7 @@
       districtBoundaries = boundaries.districts || {};
       yandexMapsApiKey = mapConfig.yandex_maps_api_key || "";
       renderCoefficientMap(districtGroups);
+      if (currentForecast) renderAfterDeliveryRecommendation(currentForecast);
     } catch (error) {
       showMapError(
         "Не удалось загрузить данные карты. Проверь интернет и попробуй снова.",
@@ -583,6 +586,7 @@
         forecast: forecastByDistrict.get(district.name) || null,
       })),
     }));
+    populateCourierDistrictChoices();
     const container = $("district-groups");
     const openGroups = new Set(
       Array.from(container.querySelectorAll(".district-group[open] .okrug-title"))
@@ -650,6 +654,28 @@
     updateReportForm();
     applyDistrictSearch();
     renderCoefficientMap(districtGroups);
+  }
+
+  function populateCourierDistrictChoices() {
+    const allDistricts = districtGroups.flatMap((group) =>
+      group.districts.map((district) => district.name)
+    );
+    const watched = $("watched-districts");
+    const selectedWatched = new Set(
+      Array.from(watched.selectedOptions || []).map((option) => option.value),
+    );
+    watched.replaceChildren(...allDistricts.map((name) => {
+      const option = new Option(name, name);
+      option.selected = selectedWatched.has(name) || watchedDistricts.includes(name);
+      return option;
+    }));
+    const delivered = $("delivered-district");
+    const selectedDelivery = delivered.value;
+    delivered.replaceChildren(
+      new Option("Выбери район доставки", ""),
+      ...allDistricts.map((name) => new Option(name, name)),
+    );
+    delivered.value = selectedDelivery;
   }
 
   function coefficientColor(value, hasData) {
@@ -975,6 +1001,12 @@
       ? "СИГНАЛ НА БЛИЖАЙШИЙ ЧАС"
       : "ЛИЧНАЯ АНАЛИТИКА";
     $("forecast-note").textContent = forecast.note || "";
+    $("courier-shift-insights").hidden = workType !== "courier";
+    $("after-delivery").hidden = workType !== "courier";
+    $("pickup-delay-panel").hidden = workType !== "courier";
+    $("courier-alert-settings").hidden = workType !== "courier";
+    renderPickupDelaySignals(forecast);
+    renderAfterDeliveryRecommendation(forecast);
     container.replaceChildren();
     (forecast.hints || []).forEach((text) => {
       const hint = document.createElement("p");
@@ -982,6 +1014,12 @@
       hint.textContent = text;
       container.appendChild(hint);
     });
+    if (forecast.transport_context && forecast.work_type === "courier") {
+      const context = document.createElement("p");
+      context.className = "forecast-hint";
+      context.textContent = forecast.transport_context;
+      container.appendChild(context);
+    }
     if (!items.length) {
       const empty = document.createElement("p");
       empty.className = "empty-note";
@@ -1083,6 +1121,64 @@
     container.appendChild(renderMethod(forecast));
   }
 
+  function renderPickupDelaySignals(forecast) {
+    const panel = $("pickup-delay-panel");
+    const list = $("pickup-delay-list");
+    list.replaceChildren();
+    const signals = forecast.pickup_delay_signals || [];
+    panel.hidden = forecast.work_type !== "courier" || signals.length === 0;
+    signals.forEach((signal) => {
+      const row = document.createElement("p");
+      const corroboration = signal.corroborating_reporters >= 2
+        ? `подтвердили ${signal.corroborating_reporters} курьера`
+        : signal.corroborating_reporters === 1
+          ? "одно свежее сообщение"
+          : "нет свежего подтверждения";
+      row.textContent = `${signal.district} · ${corroboration} · ${signal.reported_minutes_ago} мин назад`;
+      list.appendChild(row);
+    });
+  }
+
+  function straightLineKm(first, second) {
+    const radians = (degrees) => degrees * Math.PI / 180;
+    const lat1 = radians(first.lat);
+    const lat2 = radians(second.lat);
+    const deltaLat = lat2 - lat1;
+    const deltaLon = radians(second.lon - first.lon);
+    const a = Math.sin(deltaLat / 2) ** 2
+      + Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
+    return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function renderAfterDeliveryRecommendation(forecast) {
+    const result = $("after-delivery-result");
+    if (forecast.work_type !== "courier") return;
+    const originName = $("delivered-district").value;
+    const origin = districtCenters[originName];
+    if (!origin) {
+      result.textContent = "Выбери район доставки, чтобы посмотреть близкие районы.";
+      return;
+    }
+    if (forecast.status !== "available") {
+      result.textContent = "Для надёжного ориентира пока мало данных; рекомендацию не показываем.";
+      return;
+    }
+    const nearby = (forecast.after_delivery_candidates || forecast.items || [])
+      .filter((item) => item.district !== originName && districtCenters[item.district])
+      .map((item) => ({
+        ...item,
+        straightLineKm: straightLineKm(origin, districtCenters[item.district]),
+      }))
+      .filter((item) => item.straightLineKm <= 5)
+      .sort((a, b) => b.score - a.score);
+    if (!nearby.length) {
+      result.textContent = "Рядом нет района с достаточно надёжной историей. Уверенность низкая — рекомендации нет.";
+      return;
+    }
+    const best = nearby[0];
+    result.textContent = `Приблизительный ориентир: ${best.district} — относительный балл ${best.score}/100, уверенность ${best.confidence}%, около ${best.straightLineKm.toFixed(1)} км по прямой от центра района. Это не маршрут, ETA или гарантия заказа.`;
+  }
+
   function renderMethod(forecast) {
     const factorLabels = {
       weather: "погода",
@@ -1128,6 +1224,9 @@
   $("map-layer").addEventListener("change", (event) => {
     mapLayer = event.currentTarget.value;
     renderDistricts(districtGroups, currentForecast);
+  });
+  $("delivered-district").addEventListener("change", () => {
+    if (currentForecast) renderAfterDeliveryRecommendation(currentForecast);
   });
 
   function renderChart(chart) {
@@ -1253,7 +1352,17 @@
       title.textContent = shift.district || "Смена без района";
       const subtitle = document.createElement("span");
       subtitle.className = "shift-subtitle";
-      subtitle.textContent = `${formatDate(shift.timestamp)} · ${shift.hours_worked || 0} ч`;
+      const details = [`${formatDate(shift.timestamp)} · ${shift.hours_worked || 0} ч`];
+      if (workType === "courier") {
+        details.push(shift.orders_count_known
+          ? `${shift.orders_count || 0} заказов`
+          : "число заказов не записано");
+        if (Number(shift.distance_km) > 0) {
+          details.push(`${Number(shift.distance_km).toLocaleString("ru-RU")} км`);
+        }
+        details.push("чистый доход по записи");
+      }
+      subtitle.textContent = details.join(" · ");
       info.append(title, subtitle);
       const money = document.createElement("div");
       money.className = "shift-money";
@@ -1375,6 +1484,12 @@
     notificationForm.elements.frequency.value = notifications.frequency || "daily";
     notificationForm.elements.quiet_start.value = notifications.quiet_start || "";
     notificationForm.elements.quiet_end.value = notifications.quiet_end || "";
+    watchedDistricts = Array.isArray(notifications.watched_districts)
+      ? notifications.watched_districts
+      : [];
+    notificationForm.elements.work_start.value = notifications.work_start || "";
+    notificationForm.elements.work_end.value = notifications.work_end || "";
+    populateCourierDistrictChoices();
     workType = profile.work_type;
     availableWorkTypes = profile.directions || [];
     updateWorkTypeButtons();
@@ -1491,6 +1606,28 @@
     $("average-order-duration").textContent = data.summary.orders_count
       ? `${data.summary.average_order_duration_minutes} мин`
       : "—";
+    $("courier-shift-insights").hidden = workType !== "courier";
+    if (workType === "courier") {
+      const insights = data.summary.courier_insights || {};
+      $("courier-net-hour").textContent = insights.recorded_net_per_hour === null
+        || insights.recorded_net_per_hour === undefined
+        ? "—"
+        : `${currency.format(insights.recorded_net_per_hour)}/ч`;
+      $("courier-orders-hour").textContent = insights.orders_per_hour === null
+        || insights.orders_per_hour === undefined
+        ? "—"
+        : `${insights.orders_per_hour} · ${insights.known_order_shifts} смен`;
+      $("courier-net-order").textContent = insights.recorded_net_per_order === null
+        || insights.recorded_net_per_order === undefined
+        ? "—"
+        : currency.format(insights.recorded_net_per_order);
+      $("courier-distance-cost").textContent = `${insights.distance_km || 0} км · ${
+        insights.cash_expenses_per_km === null
+          || insights.cash_expenses_per_km === undefined
+          ? "расходы/км —"
+          : `${currency.format(insights.cash_expenses_per_km)}/км`
+      }`;
+    }
     const comparison = $("period-comparison");
     if (data.summary.previous_period_shifts) {
       const difference = data.summary.net_income
@@ -1745,12 +1882,19 @@
     payload.frequency = form.elements.frequency.value;
     payload.quiet_start = form.elements.quiet_start.value;
     payload.quiet_end = form.elements.quiet_end.value;
+    payload.watched_districts = Array.from(
+      form.elements.watched_districts.selectedOptions,
+      (option) => option.value,
+    );
+    payload.work_start = form.elements.work_start.value;
+    payload.work_end = form.elements.work_end.value;
     try {
       await api("/api/notifications/preferences", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      watchedDistricts = payload.watched_districts;
       $("notification-message").textContent = "Настройки сохранены.";
     } catch (error) {
       $("notification-message").textContent = error.message || "Не удалось сохранить настройки.";

@@ -40,7 +40,7 @@ REPORT_CATEGORIES = {
     "courier": {
         "high_demand", "low_activity", "many_orders", "long_wait",
         "few_couriers", "many_couriers",
-        "restaurant_busy", "order_problem", "delivery_problem",
+        "restaurant_busy", "pickup_delay", "order_problem", "delivery_problem",
         "traffic", "accident", "road_closure",
     },
 }
@@ -569,8 +569,19 @@ async def save_notification_preferences(request: web.Request) -> web.Response:
         *database.NOTIFICATION_BOOLEAN_FIELDS,
         "frequency", "quiet_start", "quiet_end",
     }
-    if not isinstance(payload, dict) or set(payload) != required:
+    targeted_fields = {"watched_districts", "work_start", "work_end"}
+    if (
+        not isinstance(payload, dict)
+        or not required.issubset(payload)
+        or set(payload) - required - targeted_fields
+    ):
         raise web.HTTPBadRequest(text="Notification preferences are incomplete")
+    saved_preferences = await asyncio.to_thread(
+        database.get_notification_preferences, user["id"]
+    )
+    payload.setdefault("watched_districts", saved_preferences["watched_districts"])
+    payload.setdefault("work_start", saved_preferences["work_start"])
+    payload.setdefault("work_end", saved_preferences["work_end"])
     for field in database.NOTIFICATION_BOOLEAN_FIELDS:
         if not isinstance(payload[field], bool):
             raise web.HTTPBadRequest(text=f"{field} must be true or false")
@@ -580,6 +591,31 @@ async def save_notification_preferences(request: web.Request) -> web.Response:
     ):
         raise web.HTTPBadRequest(text="Choose a supported notification frequency")
     for field in ("quiet_start", "quiet_end"):
+        value = payload[field]
+        if not isinstance(value, str) or len(value) not in {0, 5}:
+            raise web.HTTPBadRequest(text=f"{field} must use HH:MM format")
+        if value:
+            try:
+                parsed_time = datetime.strptime(value, "%H:%M")
+            except ValueError:
+                raise web.HTTPBadRequest(text=f"{field} must use HH:MM format")
+            if parsed_time.strftime("%H:%M") != value:
+                raise web.HTTPBadRequest(text=f"{field} must use HH:MM format")
+    districts = payload["watched_districts"]
+    if (
+        not isinstance(districts, list)
+        or len(districts) > len(config.MOSCOW_DISTRICTS)
+        or any(
+            not isinstance(district, str)
+            or district not in config.MOSCOW_DISTRICTS
+            for district in districts
+        )
+        or len(set(districts)) != len(districts)
+    ):
+        raise web.HTTPBadRequest(text="Choose valid watched districts")
+    if bool(payload["work_start"]) != bool(payload["work_end"]):
+        raise web.HTTPBadRequest(text="Set both working-hours bounds or leave both empty")
+    for field in ("work_start", "work_end"):
         value = payload[field]
         if not isinstance(value, str) or len(value) not in {0, 5}:
             raise web.HTTPBadRequest(text=f"{field} must use HH:MM format")

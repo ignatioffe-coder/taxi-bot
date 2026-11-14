@@ -83,6 +83,77 @@ def _weather_multiplier(factors: dict, work_type: str) -> tuple[float, str | Non
     return 1.0 + share * impact, label or None
 
 
+def _courier_mode_context(vehicle_type: str, weather: dict | None) -> str:
+    """Give cautious, mode-specific context without treating weather as orders."""
+    modes = {
+        "foot": ("пешком", "Пешая доставка"),
+        "walking": ("пешком", "Пешая доставка"),
+        "bicycle": ("на велосипеде", "Велосипедная доставка"),
+        "bike": ("на велосипеде", "Велосипедная доставка"),
+        "scooter": ("на самокате", "Доставка на самокате"),
+        "motorcycle": ("на мотоцикле", "Моторизованная доставка"),
+        "car": ("на автомобиле", "Автомобильная доставка"),
+    }
+    key = str(vehicle_type or "").strip().lower()
+    mode = modes.get(key)
+    if not mode:
+        return (
+            "Тип транспорта не указан или не распознан; прогноз не переносит "
+            "оценки между режимами."
+        )
+    name, label = mode
+    try:
+        impact = float((weather or {}).get("impact") or 0)
+    except (TypeError, ValueError):
+        impact = 0
+    if impact >= 0.5 and key in {"foot", "walking", "bicycle", "bike", "scooter"}:
+        return (
+            f"{label} {name}: непогода может усложнить передвижение; "
+            "это контекст условий, а не отдельная оценка спроса."
+        )
+    if impact >= 0.5 and key in {"car", "motorcycle"}:
+        return (
+            f"{label} {name}: учитывай дорожные условия; погодный сигнал "
+            "не является прогнозом коэффициента сервиса."
+        )
+    return f"Персональная история отбирается для транспорта {name}."
+
+
+def _canonical_vehicle_type(vehicle_type: str) -> str:
+    key = str(vehicle_type or "").strip().lower()
+    return {"walking": "foot", "bike": "bicycle"}.get(key, key)
+
+
+def _pickup_delay_signals(factors: dict, now: datetime) -> list[dict]:
+    """Expose fresh restaurant pickup-delay reports without affecting demand."""
+    result = []
+    for district, details in (factors.get("report_details") or {}).items():
+        report = ((details.get("category_details") or {}).get("pickup_delay") or {})
+        try:
+            reporters = int(report.get("reporters") or 0)
+            confirmed_reporters = int(
+                report.get("recent_reporters", reporters) or 0
+            )
+        except (TypeError, ValueError):
+            reporters = 0
+            confirmed_reporters = 0
+        updated = _parse_timestamp(report.get("last_report_update"))
+        if not report.get("report_count", reporters) or updated is None:
+            continue
+        age_minutes = max(0, round((now - updated).total_seconds() / 60))
+        if age_minutes > 45:
+            continue
+        result.append({
+            "district": district,
+            "risk": "corroborated" if confirmed_reporters >= 2 else "single",
+            "reporters": reporters,
+            "corroborating_reporters": confirmed_reporters,
+            "reported_minutes_ago": age_minutes,
+            "separate_from_demand": True,
+        })
+    return sorted(result, key=lambda row: (row["reported_minutes_ago"], row["district"]))
+
+
 def _adjusted_score(score: int, multiplier: float) -> int:
     return max(0, min(100, round(score * multiplier)))
 
@@ -464,10 +535,13 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
     history_since = now - timedelta(days=COURIER_HISTORY_DAYS)
     target_time = now + timedelta(minutes=60)
     all_shifts = inputs.get("shifts", [])
-    selected_vehicle = inputs.get("vehicle_type") or ""
+    selected_vehicle = _canonical_vehicle_type(inputs.get("vehicle_type"))
     matching_shifts = [
         shift for shift in all_shifts
-        if shift.get("vehicle_type") == selected_vehicle and selected_vehicle
+        if (
+            _canonical_vehicle_type(shift.get("vehicle_type")) == selected_vehicle
+            and selected_vehicle
+        )
     ]
     legacy_shifts = [
         shift for shift in all_shifts if not shift.get("vehicle_type")
@@ -906,6 +980,19 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
         ),
         "empty_message": "Нет сохранённых смен с районом и часами работы.",
         "hints": _courier_hints(inputs),
+        "after_delivery_candidates": [
+            {
+                "district": item["district"],
+                "score": item["score"],
+                "confidence": item["confidence"],
+                "sample_count": item["sample_count"],
+                "method": item.get("method", ""),
+            }
+            for item in items
+            if item.get("method") != "poi_baseline"
+            and int(item.get("sample_count") or 0) >= 3
+            and int(item.get("confidence") or 0) >= 50
+        ],
         "items": items[:7],
     }
 
@@ -932,6 +1019,14 @@ def build_forecast(
     )
     result["generated_at"] = generated_at.isoformat(timespec="minutes")
     result["weather"] = factors.get("weather")
+    if work_type == "courier":
+        result["transport_context"] = _courier_mode_context(
+            result.get("transport_type") or inputs.get("vehicle_type") or "",
+            factors.get("weather"),
+        )
+        result["pickup_delay_signals"] = _pickup_delay_signals(
+            factors, generated_at
+        )
     result["horizons_minutes"] = list(HORIZONS)
     result["factors"] = {
         "weather": bool(factors.get("weather")),
