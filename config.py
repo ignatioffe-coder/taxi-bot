@@ -28,6 +28,7 @@ if WEBAPP_URL and not WEBAPP_URL.startswith("https://"):
 
 # The browser-facing key is restricted to the Mini App domain in Yandex's dashboard.
 YANDEX_MAPS_API_KEY = os.getenv("YANDEX_MAPS_API_KEY", "").strip()
+TOMTOM_TRAFFIC_API_KEY = os.getenv("TOMTOM_TRAFFIC_API_KEY", "").strip()
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "").strip()
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "").strip()
 

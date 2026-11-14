@@ -11,6 +11,7 @@
 """
 
 import json
+import logging
 import math
 import threading
 import time
@@ -22,6 +23,7 @@ import config
 
 ROOT = Path(__file__).resolve().parent
 POI_PATH = ROOT / "static" / "district-poi.json"
+LOGGER = logging.getLogger(__name__)
 
 MOSCOW_LAT = 55.7558
 MOSCOW_LON = 37.6173
@@ -229,6 +231,8 @@ def load_live_factors(now=None) -> dict:
     moment = now or config.get_moscow_time()
     airport_impacts: dict = {}
     event_impacts: dict = {}
+    traffic_impacts: dict = {}
+    centers: dict = {}
     try:
         # Импорт внутри функции: airports и events сами используют этот модуль
         import airports
@@ -241,9 +245,18 @@ def load_live_factors(now=None) -> dict:
     except Exception:  # noqa: BLE001 - слой факторов не должен ронять прогноз
         airport_impacts, event_impacts = {}, {}
 
+    try:
+        import tomtom_traffic
+
+        if centers:
+            traffic_impacts = tomtom_traffic.load_traffic_impacts(centers)
+    except Exception:  # noqa: BLE001 - внешний источник не должен ронять прогноз
+        LOGGER.exception("Не удалось загрузить фактор пробок TomTom")
+
     return {
         "weather": get_weather(),
         "poi_density": load_poi_density(),
         "airports": airport_impacts,
         "events": event_impacts,
+        "traffic": traffic_impacts,
     }

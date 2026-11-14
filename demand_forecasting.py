@@ -108,6 +108,25 @@ def _reports_multiplier(factors: dict, district: str) -> float:
     return value if value > 0 else 1.0
 
 
+def _traffic_multiplier(factors: dict, district: str) -> float:
+    """Apply a small road-access penalty, not a direct demand measurement."""
+    traffic = factors.get("traffic") or {}
+    try:
+        impact = float(traffic.get(district, 0))
+    except (TypeError, ValueError):
+        return 1.0
+    return 1.0 - min(0.12, max(0.0, impact))
+
+
+def _traffic_suffix(factors: dict) -> str:
+    if not factors.get("traffic"):
+        return ""
+    return (
+        " Дорожная обстановка TomTom слегка снижает оценку рядом с инцидентами; "
+        "это не прямое измерение спроса."
+    )
+
+
 
 def _parse_timestamp(value) -> datetime | None:
     if isinstance(value, datetime):
@@ -191,6 +210,7 @@ def _taxi_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             base_score,
             multiplier
             * _location_multiplier(factors, district)
+            * _traffic_multiplier(factors, district)
             * _reports_multiplier(factors, district),
         )
 
@@ -252,7 +272,7 @@ def _taxi_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             "час за последние 30 дней, погоду и сообщения водителей о пробках и "
             "спросе. Балл 0–100 — сравнительный ориентир, а не число заказов. "
             "Пока не учитываются реальное число машин на линии и расстояние от "
-            "вашей точки." + weather_suffix
+            "вашей точки." + weather_suffix + _traffic_suffix(factors)
         ),
         "empty_message": (
             "Пока недостаточно замеров на это время. Добавляй коэффициенты, "
@@ -308,6 +328,7 @@ def _baseline_items(
             base_score,
             multiplier
             * _location_multiplier(factors, district)
+            * _traffic_multiplier(factors, district)
             * _reports_multiplier(factors, district),
         )
         items.append({
@@ -358,7 +379,7 @@ def _courier_poi_baseline(
             "(OpenStreetMap): кафе и рестораны — основной источник заказов "
             "доставки. Это ориентир без ваших смен; чем больше смен с районом "
             "ты сохранишь, тем точнее станет персональная оценка. Учтены погода "
-            "и сообщения курьеров." + weather_suffix
+            "и сообщения курьеров." + weather_suffix + _traffic_suffix(factors)
         ),
         "empty_message": "Нет данных о плотности заведений.",
         "hints": _courier_hints(inputs or {}),
@@ -556,6 +577,7 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             base_score,
             multiplier
             * _location_multiplier(factors, district)
+            * _traffic_multiplier(factors, district)
             * _reports_multiplier(factors, district),
         )
         confidence = min(
@@ -643,6 +665,7 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             "45; это не прогноз числа заказов. Учтены погода и сообщения "
             "курьеров об обстановке."
             + transport_suffix + time_suffix + weather_suffix + blend_suffix
+            + _traffic_suffix(factors)
         ),
         "empty_message": "Нет сохранённых смен с районом и часами работы.",
         "hints": _courier_hints(inputs),
@@ -678,6 +701,7 @@ def build_forecast(
         "poi_density": bool(factors.get("poi_density")),
         "airports": bool(factors.get("airports")),
         "events": bool(factors.get("events")),
+        "traffic": bool(factors.get("traffic")),
         "reports": bool(factors.get("reports")),
     }
     return result
