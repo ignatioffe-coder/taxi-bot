@@ -182,7 +182,7 @@
         </div>
         <div id="shift-start-field" class="field" hidden><label for="shift-started-at">Начало смены <span class="optional">необязательно</span></label><input id="shift-started-at" name="started_at" type="datetime-local"><p class="field-hint">Фактическое время начала помогает сравнивать курьерские смены для выбранного часа.</p></div>
         <div class="form-row">
-          <div class="field"><label for="orders-count-input">Заказов <span class="optional">необязательно</span></label><input id="orders-count-input" name="orders_count" type="number" min="0" max="1000" step="1" inputmode="numeric" placeholder="0"></div>
+          <div class="field"><label for="orders-count-input">Заказов <span class="optional">необязательно</span></label><input id="orders-count-input" name="orders_count" type="number" min="0" max="1000" step="1" inputmode="numeric" placeholder="0"><p class="field-hint">Укажи и ноль, если заказов не было: это улучшит прогноз заказов/ч.</p></div>
           <div class="field"><label for="distance-km-input">Пробег, км <span class="optional">необязательно</span></label><input id="distance-km-input" name="distance_km" type="number" min="0" max="2000" step="0.1" inputmode="decimal" placeholder="0"></div>
         </div>
 
@@ -284,15 +284,15 @@
           <label class="notification-option"><span>Изменения спроса</span><input type="checkbox" name="demand_changes"></label>
           <label class="notification-option"><span>Перспективные районы</span><input type="checkbox" name="promising_areas"></label>
           <label class="notification-option"><span>Погода</span><input type="checkbox" name="weather_changes"></label>
-          <label class="notification-option"><span>Городские мероприятия <span class="optional">источник не подключён</span></span><input type="checkbox" name="city_events" disabled></label>
+          <label class="notification-option"><span>Уведомления о мероприятиях <span class="optional">пока недоступны</span></span><input type="checkbox" name="city_events" disabled></label>
           <label class="notification-option"><span>Сообщения водителей о дорогах</span><input type="checkbox" name="traffic_events"></label>
           <label class="notification-option"><span>Персональные рекомендации</span><input type="checkbox" name="personal_recommendations"></label>
           <label class="notification-option"><span>Напоминания о документах</span><input type="checkbox" name="financial_reminders"></label>
-          <div class="form-row">
+          <div class="form-row notification-schedule">
             <div class="field"><label for="notification-frequency">Частота новых уведомлений</label><select id="notification-frequency" name="frequency"><option value="immediate">Сразу</option><option value="hourly">Не чаще раза в час</option><option value="daily">Ежедневно</option></select></div>
             <div class="field"><label for="quiet-start">Не беспокоить с</label><input id="quiet-start" name="quiet_start" type="time"></div>
+            <div class="field"><label for="quiet-end">Не беспокоить до</label><input id="quiet-end" name="quiet_end" type="time"></div>
           </div>
-          <label for="quiet-end">Не беспокоить до</label><input id="quiet-end" name="quiet_end" type="time">
           <button class="primary-button" type="submit">Сохранить настройки <span>→</span></button>
         </form>
         <p id="notification-message" class="form-message" role="status"></p>

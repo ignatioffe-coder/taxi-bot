@@ -406,6 +406,11 @@ async def submit_shift(request: web.Request) -> web.Response:
         or not 0 <= orders_count <= 1000
     ):
         raise web.HTTPBadRequest(text="orders_count must be an integer from 0 to 1000")
+    orders_count_known = payload.get(
+        "orders_count_known", "orders_count" in payload
+    )
+    if not isinstance(orders_count_known, bool):
+        raise web.HTTPBadRequest(text="orders_count_known must be true or false")
 
     started_at_value = payload.get("started_at")
     started_at = None
@@ -451,6 +456,7 @@ async def submit_shift(request: web.Request) -> web.Response:
         connectivity_cost=amounts["connectivity_cost"],
         distance_km=distance_km,
         orders_count=orders_count,
+        orders_count_known=orders_count_known,
         started_at=started_at,
         vehicle_type=profile.get("vehicle_type") or "",
     )

@@ -9,6 +9,8 @@ from external_factors import poi_scores
 TAXI_HISTORY_DAYS = 30
 COURIER_HISTORY_DAYS = 90
 COURIER_RECENT_DAYS = 45
+COURIER_ORDER_MIN_SAMPLES = 3
+COURIER_ORDER_MIN_DAYS = 2
 TAXI_CURRENT_WINDOW = timedelta(hours=2)
 TAXI_MIN_HISTORY_SAMPLES = 3
 
@@ -302,6 +304,14 @@ def _courier_hints(inputs: dict) -> list[str]:
             f"Ещё {other} смен(и) записаны в другом направлении: такси и "
             "доставка считаются отдельно."
         )
+    unknown_orders = inputs.get("orders_count_unknown")
+    if unknown_orders is None:
+        unknown_orders = (inputs.get("excluded") or {}).get("orders_count_unknown", 0)
+    if unknown_orders:
+        hints.append(
+            f"В {unknown_orders} смен(ах) не указано число заказов; они не "
+            "учитываются при расчёте заказов/ч. Укажи число заказов, включая 0."
+        )
     return hints
 
 
@@ -416,7 +426,16 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
         transport_basis = "all"
 
     def period_totals():
-        return {"income": 0.0, "hours": 0.0, "shifts": 0, "days": set()}
+        return {
+            "income": 0.0,
+            "hours": 0.0,
+            "shifts": 0,
+            "days": set(),
+            "orders": 0,
+            "order_hours": 0.0,
+            "order_shifts": 0,
+            "order_days": set(),
+        }
 
     def district_totals():
         return {
@@ -424,6 +443,10 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             "hours": 0.0,
             "shifts": 0,
             "days": set(),
+            "orders": 0,
+            "order_hours": 0.0,
+            "order_shifts": 0,
+            "order_days": set(),
             "recent": period_totals(),
             "historical": period_totals(),
         }
@@ -471,6 +494,23 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
         period["shifts"] += 1
         period["days"].add(timestamp.date())
 
+        has_orders_field = (
+            "orders_count" in shift and shift["orders_count"] is not None
+        )
+        orders_count_known = shift.get("orders_count_known")
+        if orders_count_known is None:
+            orders_count_known = has_orders_field
+        try:
+            orders_count = int(shift.get("orders_count") or 0)
+        except (TypeError, ValueError):
+            orders_count = -1
+        if orders_count_known and orders_count >= 0:
+            for aggregate in (total, period):
+                aggregate["orders"] += orders_count
+                aggregate["order_hours"] += hours
+                aggregate["order_shifts"] += 1
+                aggregate["order_days"].add(timestamp.date())
+
         if start_time is not None:
             hour_difference = abs(start_time.hour - target_time.hour)
             hour_difference = min(hour_difference, 24 - hour_difference)
@@ -483,6 +523,11 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
                 timed["hours"] += hours
                 timed["shifts"] += 1
                 timed["days"].add(start_time.date())
+                if orders_count_known and orders_count >= 0:
+                    timed["orders"] += orders_count
+                    timed["order_hours"] += hours
+                    timed["order_shifts"] += 1
+                    timed["order_days"].add(start_time.date())
 
     timed_sample_count = sum(
         total["shifts"] for total in timed_totals_by_district.values()
@@ -492,15 +537,60 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
         for total in timed_totals_by_district.values()
         for day in total["days"]
     })
-    time_match_supported = timed_sample_count >= 3 and timed_day_count >= 2
+    income_time_match_supported = timed_sample_count >= 3 and timed_day_count >= 2
+
+    def order_rates(source):
+        return {
+            district: total["orders"] / total["order_hours"]
+            for district, total in source.items()
+            if total["order_hours"] > 0
+        }
+
+    all_order_rates = order_rates(totals_by_district)
+    order_sample_count = sum(
+        total["order_shifts"] for total in totals_by_district.values()
+    )
+    order_day_count = len({
+        day
+        for total in totals_by_district.values()
+        for day in total["order_days"]
+    })
+    order_data_supported = (
+        order_sample_count >= COURIER_ORDER_MIN_SAMPLES
+        and order_day_count >= COURIER_ORDER_MIN_DAYS
+        and len(all_order_rates) >= 2
+    )
+    timed_order_rates = order_rates(timed_totals_by_district)
+    timed_order_sample_count = sum(
+        total["order_shifts"] for total in timed_totals_by_district.values()
+    )
+    timed_order_day_count = len({
+        day
+        for total in timed_totals_by_district.values()
+        for day in total["order_days"]
+    })
+    order_time_match_supported = (
+        timed_order_sample_count >= COURIER_ORDER_MIN_SAMPLES
+        and timed_order_day_count >= COURIER_ORDER_MIN_DAYS
+        and len(timed_order_rates) >= 2
+    )
+    use_order_rate = order_data_supported
+    time_match_supported = (
+        order_time_match_supported
+        if use_order_rate else income_time_match_supported
+    )
     ranking_totals = (
         timed_totals_by_district if time_match_supported else totals_by_district
     )
-    rates = {
-        district: total["income"] / total["hours"]
-        for district, total in ranking_totals.items()
-        if total["hours"] > 0
-    }
+    rates = (
+        order_rates(ranking_totals)
+        if use_order_rate
+        else {
+            district: total["income"] / total["hours"]
+            for district, total in ranking_totals.items()
+            if total["hours"] > 0
+        }
+    )
     if not rates:
         baseline = _courier_poi_baseline(factors, now, inputs)
         if baseline is not None:
@@ -532,13 +622,23 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
 
     comparison_rates = {
         district: (
-            totals_by_district[district]["recent"]["income"]
-            / totals_by_district[district]["recent"]["hours"]
-            if totals_by_district[district]["recent"]["hours"] > 0
-            and not time_match_supported
+            (
+                totals_by_district[district]["recent"]["orders"]
+                / totals_by_district[district]["recent"]["order_hours"]
+                if use_order_rate else
+                totals_by_district[district]["recent"]["income"]
+                / totals_by_district[district]["recent"]["hours"]
+            )
+            if not time_match_supported
+            and (
+                totals_by_district[district]["recent"]["order_hours"] > 0
+                if use_order_rate else
+                totals_by_district[district]["recent"]["hours"] > 0
+            )
             else rates[district]
         )
         for district in ranking_totals
+        if district in rates
     }
     minimum_rate = min(comparison_rates.values())
     maximum_rate = max(comparison_rates.values())
@@ -546,13 +646,44 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
     for district, rate in comparison_rates.items():
         total = ranking_totals[district]
         trend_total = totals_by_district[district]
-        recent_rate = (
-            trend_total["recent"]["income"] / trend_total["recent"]["hours"]
-            if trend_total["recent"]["hours"] > 0 else None
+        recent_total = trend_total["recent"]
+        historical_total = trend_total["historical"]
+        if use_order_rate:
+            recent_rate = (
+                recent_total["orders"] / recent_total["order_hours"]
+                if recent_total["order_hours"] > 0 else None
+            )
+            historical_rate = (
+                historical_total["orders"] / historical_total["order_hours"]
+                if historical_total["order_hours"] > 0 else None
+            )
+            sample_count = total["order_shifts"]
+            sample_days = total["order_days"]
+            recent_samples = recent_total["order_shifts"]
+            historical_samples = historical_total["order_shifts"]
+        else:
+            recent_rate = (
+                recent_total["income"] / recent_total["hours"]
+                if recent_total["hours"] > 0 else None
+            )
+            historical_rate = (
+                historical_total["income"] / historical_total["hours"]
+                if historical_total["hours"] > 0 else None
+            )
+            sample_count = total["shifts"]
+            sample_days = total["days"]
+            recent_samples = recent_total["shifts"]
+            historical_samples = historical_total["shifts"]
+        recent_metric_has_data = (
+            recent_total["order_hours"] > 0
+            if use_order_rate else recent_total["hours"] > 0
         )
-        historical_rate = (
-            trend_total["historical"]["income"] / trend_total["historical"]["hours"]
-            if trend_total["historical"]["hours"] > 0 else None
+        rate_period = (
+            "similar_time"
+            if time_match_supported
+            else "recent_45"
+            if recent_metric_has_data
+            else "history_90"
         )
         change = (
             recent_rate - historical_rate
@@ -560,7 +691,7 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             else None
         )
         threshold = (
-            max(abs(historical_rate) * 0.1, 25)
+            max(abs(historical_rate) * 0.1, 0.1 if use_order_rate else 25)
             if historical_rate is not None else None
         )
         trend = (
@@ -580,9 +711,23 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             * _traffic_multiplier(factors, district)
             * _reports_multiplier(factors, district),
         )
+        net_income_per_hour = (
+            rate
+            if not use_order_rate
+            else total["income"] / total["hours"]
+            if total["hours"] > 0
+            else None
+        )
+        orders_per_hour = (
+            rate
+            if use_order_rate
+            else total["orders"] / total["order_hours"]
+            if total["order_hours"] > 0
+            else None
+        )
         confidence = min(
             95,
-            20 + min(total["shifts"], 4) * 15 + min(len(total["days"]), 5) * 5,
+            20 + min(sample_count, 4) * 15 + min(len(sample_days), 5) * 5,
         )
         items.append({
             "district": district,
@@ -590,14 +735,35 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             "score_base": base_score,
             "confidence": confidence,
             "trend": trend,
-            "sample_count": total["shifts"],
-            "recent_samples": trend_total["recent"]["shifts"],
-            "historical_samples": trend_total["historical"]["shifts"],
-            "net_income_per_hour": round(rate, 2),
-            "historical_net_income_per_hour": (
-                round(historical_rate, 2) if historical_rate is not None else None
+            "sample_count": sample_count,
+            "recent_samples": recent_samples,
+            "historical_samples": historical_samples,
+            "metric_type": (
+                "orders_per_hour" if use_order_rate else "net_income_per_hour"
             ),
-            "metric_label": "чистый доход/ч",
+            "rate_period": rate_period,
+            "metric_label": "заказов/ч" if use_order_rate else "чистый доход/ч",
+            "orders_per_hour": (
+                round(orders_per_hour, 2) if orders_per_hour is not None else None
+            ),
+            "recent_orders_per_hour": (
+                round(recent_rate, 2)
+                if use_order_rate and recent_rate is not None else None
+            ),
+            "historical_orders_per_hour": (
+                round(historical_rate, 2)
+                if use_order_rate and historical_rate is not None else None
+            ),
+            "net_income_per_hour": (
+                round(net_income_per_hour, 2)
+                if net_income_per_hour is not None else None
+            ),
+            "historical_net_income_per_hour": (
+                round(
+                    historical_total["income"] / historical_total["hours"], 2
+                )
+                if historical_total["hours"] > 0 else None
+            ),
             "horizons": _horizon_scores(score, now, "courier"),
         })
 
@@ -646,6 +812,13 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
         if weather_label
         else " Погода сейчас недоступна."
     )
+    metric_note = (
+        "При достаточной истории рейтинг основан на заказах в час; чистый "
+        "доход в час показан отдельно."
+        if use_order_rate
+        else "Пока нет достаточной истории с указанным числом заказов; рейтинг "
+        "временно основан на чистом доходе в час. Указывай число заказов в смене."
+    )
     blended = any(item.get("method") == "poi_baseline" for item in items)
     return {
         "work_type": "courier",
@@ -660,10 +833,9 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
         "transport_type": selected_vehicle or None,
         "status": "available" if total_shifts >= 3 else "limited",
         "note": (
-            "Балл сравнивает районы по вашей истории чистого дохода за час за "
-            "последние 90 дней. Динамика сравнивает последние 45 дней с предыдущими "
-            "45; это не прогноз числа заказов. Учтены погода и сообщения "
-            "курьеров об обстановке."
+            f"Балл сравнивает районы по данным смен за последние 90 дней. {metric_note} "
+            "Динамика сравнивает последние 45 дней с предыдущими 45. Учтены погода "
+            "и сообщения курьеров об обстановке."
             + transport_suffix + time_suffix + weather_suffix + blend_suffix
             + _traffic_suffix(factors)
         ),
