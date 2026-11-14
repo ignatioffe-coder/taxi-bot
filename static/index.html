@@ -70,6 +70,16 @@
         <article class="metric-card"><span class="metric-icon income-icon">↗</span><span class="metric-label">Средний чек</span><strong id="average-check">—</strong></article>
         <article class="metric-card"><span class="metric-icon hours-icon">◷</span><span class="metric-label">Время на заказ</span><strong id="average-order-duration">—</strong></article>
       </div>
+      <section id="courier-shift-insights" class="section-block" hidden>
+        <div class="section-heading"><div><p class="eyebrow">ДНЕВНИК КУРЬЕРА</p><h2>Эффективность записанных смен</h2></div></div>
+        <p class="forecast-note">Показатели рассчитаны по сохранённым сменам, это не оценка выплат Яндекс Про.</p>
+        <div class="metric-grid">
+          <article class="metric-card"><span class="metric-label">Записанный чистый доход/ч</span><strong id="courier-net-hour">—</strong></article>
+          <article class="metric-card"><span class="metric-label">Заказов/ч · только смены с указанным числом</span><strong id="courier-orders-hour">—</strong></article>
+          <article class="metric-card"><span class="metric-label">Записанный чистый доход/заказ</span><strong id="courier-net-order">—</strong></article>
+          <article class="metric-card"><span class="metric-label">Пробег · расходы на км</span><strong id="courier-distance-cost">—</strong></article>
+        </div>
+      </section>
 
       <section class="section-block">
         <div class="section-heading"><div><p class="eyebrow">РАСХОДЫ</p><h2>Куда уходят деньги</h2></div></div>
@@ -97,6 +107,16 @@
           <span id="forecast-chip" class="forecast-chip" hidden>стартовая оценка по заведениям</span>
         </div>
         <div id="recommendations" class="recommendations"><p class="loading">Подбираем районы…</p></div>
+        <section id="after-delivery" class="after-delivery" hidden>
+          <label for="delivered-district">После доставки в районе</label>
+          <select id="delivered-district"><option value="">Выбери район доставки</option></select>
+          <p id="after-delivery-result" class="forecast-note">Покажем только приблизительный ориентир рядом — не маршрут и не ETA.</p>
+        </section>
+        <section id="pickup-delay-panel" class="pickup-delay-panel" hidden>
+          <strong>Ожидание при получении</strong>
+          <div id="pickup-delay-list"></div>
+          <p class="forecast-note">Отдельные недавние сообщения курьеров; они не считаются спросом и не меняют его балл.</p>
+        </section>
       </section>
 
       <section class="section-block">
@@ -130,7 +150,7 @@
       </section>
       <section class="section-block reports-block">
         <div class="section-heading"><div><p class="eyebrow">СООБЩЕНИЯ ВОДИТЕЛЕЙ</p><h2>Что происходит рядом</h2></div><button id="refresh-reports" class="text-button" type="button">Обновить</button></div>
-        <p class="reports-disclaimer">Сообщения от сообщества, не подтверждённые данные о заказах. Они автоматически исчезают через несколько часов.</p>
+        <p class="reports-disclaimer">Сообщения от сообщества, не подтверждённые данные о заказах. Они автоматически исчезают через несколько часов. Ожидание при получении показывается отдельно от спроса.</p>
         <div id="driver-reports" class="driver-reports"><p class="loading">Загружаем сообщения…</p></div>
       </section>
       <section class="form-card report-card">
@@ -292,6 +312,15 @@
             <div class="field"><label for="notification-frequency">Частота новых уведомлений</label><select id="notification-frequency" name="frequency"><option value="immediate">Сразу</option><option value="hourly">Не чаще раза в час</option><option value="daily">Ежедневно</option></select></div>
             <div class="field"><label for="quiet-start">Не беспокоить с</label><input id="quiet-start" name="quiet_start" type="time"></div>
             <div class="field"><label for="quiet-end">Не беспокоить до</label><input id="quiet-end" name="quiet_end" type="time"></div>
+          </div>
+          <div id="courier-alert-settings" class="courier-alert-settings">
+            <label for="watched-districts">Районы для курьерских уведомлений <span class="optional">если ничего не выбрано — весь город</span></label>
+            <select id="watched-districts" name="watched_districts" multiple size="4"></select>
+            <div class="form-row notification-schedule">
+              <div class="field"><label for="work-start">Рабочие уведомления с</label><input id="work-start" name="work_start" type="time"></div>
+              <div class="field"><label for="work-end">до</label><input id="work-end" name="work_end" type="time"></div>
+            </div>
+            <p class="field-hint">Окно действует только на курьерские уведомления и дополняет «не беспокоить».</p>
           </div>
           <button class="primary-button" type="submit">Сохранить настройки <span>→</span></button>
         </form>

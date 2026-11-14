@@ -60,6 +60,37 @@ class MultiplierTests(unittest.TestCase):
         strong = crowd_signals.district_multipliers(stats(["accident"], reporters=4), NOW)
         self.assertGreater(weak["Арбат"], strong["Арбат"])
 
+    def test_pickup_delay_does_not_corroborate_demand_reports(self):
+        stamp = NOW.strftime("%Y-%m-%d %H:%M:%S")
+        mixed = {
+            "Арбат": {
+                "reporters": 2,
+                "report_categories": ["high_demand", "pickup_delay"],
+                "last_report_update": stamp,
+                "category_details": {
+                    "high_demand": {
+                        "reporters": 1,
+                        "last_report_update": stamp,
+                    },
+                    "pickup_delay": {
+                        "reporters": 1,
+                        "last_report_update": stamp,
+                    },
+                },
+            }
+        }
+        demand_only = {
+            "Арбат": {
+                "reporters": 1,
+                "report_categories": ["high_demand"],
+                "last_report_update": stamp,
+            }
+        }
+        self.assertEqual(
+            crowd_signals.district_multipliers(mixed, NOW),
+            crowd_signals.district_multipliers(demand_only, NOW),
+        )
+
     def test_old_report_decays_and_disappears(self):
         old = crowd_signals.district_multipliers(
             stats(["road_closure"], age_minutes=60 * 24), NOW

@@ -146,6 +146,31 @@ class DemandForecastingTests(unittest.TestCase):
         self.assertEqual(item["net_income_per_hour"], 100)
         self.assertEqual(item["historical_net_income_per_hour"], 50)
 
+    def test_courier_forecast_matches_vehicle_aliases(self):
+        shifts = [{
+            "district": self.district,
+            "gross_income": 500,
+            "hours_worked": 5,
+            "timestamp": (self.now - timedelta(days=7)).isoformat(),
+            "started_at": (
+                self.now - timedelta(days=7) + timedelta(minutes=30)
+            ).isoformat(),
+            "vehicle_type": "bicycle",
+        }]
+
+        forecast = build_forecast(
+            "courier",
+            {"shifts": shifts, "vehicle_type": "bike"},
+            now=self.now,
+        )
+
+        personal_items = [
+            item for item in forecast["items"]
+            if item.get("method") != "poi_baseline"
+        ]
+        self.assertEqual(len(personal_items), 1)
+        self.assertEqual(personal_items[0]["district"], self.district)
+
     def test_courier_forecast_matches_vehicle_and_shift_start_time(self):
         matching_shifts = [
             {
@@ -237,6 +262,100 @@ class CourierHintTests(unittest.TestCase):
             now=self.now,
         )
         self.assertTrue(any("не указано число заказов" in hint for hint in forecast["hints"]))
+
+    def test_mode_context_is_explicit_and_unknown_transport_is_not_reclassified(self):
+        bicycle = build_forecast(
+            "courier",
+            {"shifts": [], "vehicle_type": "bicycle"},
+            now=self.now,
+            factors={"weather": {"impact": 0.8, "text": "Дождь"}},
+        )
+        unknown = build_forecast(
+            "courier",
+            {"shifts": [], "vehicle_type": "hoverboard"},
+            now=self.now,
+        )
+        self.assertIn("непогода может усложнить передвижение", bicycle["transport_context"])
+        self.assertIn("не распознан", unknown["transport_context"])
+        self.assertEqual(unknown["transport_type"], "hoverboard")
+
+    def test_pickup_delay_is_recent_corroborated_context_not_a_demand_score(self):
+        shifts = [
+            {
+                "district": district,
+                "gross_income": income,
+                "hours_worked": 2,
+                "timestamp": (self.now - timedelta(days=day)).isoformat(),
+            }
+            for district, income in (
+                (config.MOSCOW_DISTRICTS[0], 200),
+                (config.MOSCOW_DISTRICTS[1], 500),
+            )
+            for day in (1, 2, 3)
+        ]
+        details = {
+            config.MOSCOW_DISTRICTS[0]: {
+                "report_categories": ["pickup_delay"],
+                "category_details": {
+                    "pickup_delay": {
+                        "reporters": 2,
+                        "last_report_update": self.now.strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                },
+            }
+        }
+        forecast = build_forecast(
+            "courier",
+            {"shifts": shifts},
+            now=self.now,
+            factors={"report_details": details},
+        )
+        plain = build_forecast("courier", {"shifts": shifts}, now=self.now)
+        signal = forecast["pickup_delay_signals"][0]
+        self.assertEqual(signal["risk"], "corroborated")
+        self.assertTrue(signal["separate_from_demand"])
+        self.assertEqual(
+            {item["district"]: item["score"] for item in forecast["items"]},
+            {item["district"]: item["score"] for item in plain["items"]},
+        )
+        stale = build_forecast(
+            "courier",
+            {"shifts": []},
+            now=self.now,
+            factors={"report_details": {
+                config.MOSCOW_DISTRICTS[0]: {
+                    "category_details": {
+                        "pickup_delay": {
+                            "reporters": 2,
+                            "last_report_update": (
+                                self.now - timedelta(minutes=46)
+                            ).strftime("%Y-%m-%d %H:%M:%S"),
+                        }
+                    }
+                }
+            }},
+        )
+        self.assertEqual(stale["pickup_delay_signals"], [])
+        aging = build_forecast(
+            "courier",
+            {"shifts": []},
+            now=self.now,
+            factors={"report_details": {
+                config.MOSCOW_DISTRICTS[0]: {
+                    "category_details": {
+                        "pickup_delay": {
+                            "report_count": 2,
+                            "reporters": 2,
+                            "recent_reporters": 0,
+                            "last_report_update": (
+                                self.now - timedelta(minutes=40)
+                            ).strftime("%Y-%m-%d %H:%M:%S"),
+                        }
+                    }
+                }
+            }},
+        )
+        self.assertEqual(aging["pickup_delay_signals"][0]["risk"], "single")
 
 
 if __name__ == "__main__":

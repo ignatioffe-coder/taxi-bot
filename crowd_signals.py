@@ -77,15 +77,27 @@ def district_multipliers(
     multipliers: dict[str, float] = {}
     for district, row in (stats or {}).items():
         categories = row.get("report_categories") or []
-        effect = sum(CATEGORY_EFFECT.get(category, 0.0) for category in categories)
-        if not effect:
+        category_details = row.get("category_details") or {}
+        total = 0.0
+        for category in categories:
+            effect = CATEGORY_EFFECT.get(category, 0.0)
+            if not effect:
+                continue
+            detail = category_details.get(category) or row
+            reporters = int(
+                detail.get("recent_reporters", detail.get("reporters")) or 0
+            )
+            confirmation = min(
+                1.0, max(1, reporters) / FULL_CONFIRMATION_REPORTERS
+            )
+            age_factor = freshness(
+                detail.get("last_report_update")
+                or row.get("last_report_update"),
+                now,
+            )
+            total += effect * confirmation * age_factor
+        if not total:
             continue
-        reporters = int(row.get("reporters") or 0)
-        confirmation = min(1.0, max(1, reporters) / FULL_CONFIRMATION_REPORTERS)
-        age_factor = freshness(row.get("last_report_update"), now)
-        if age_factor <= 0:
-            continue
-        total = effect * confirmation * age_factor
         total = max(-max_effect, min(max_effect, total))
         if abs(total) < 0.005:
             continue

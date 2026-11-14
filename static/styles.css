@@ -132,6 +132,14 @@ h3 { margin: 0; font-size: 15px; }
 .chart-bar.negative { background: linear-gradient(180deg, #ff9a8f, #ca5a55); }
 .chart-label { color: var(--muted); font-size: 9px; }
 .forecast-note { margin: -4px 0 11px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.after-delivery, .pickup-delay-panel { display: grid; gap: 7px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.after-delivery label, .courier-alert-settings > label { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.after-delivery select, .notification-form select[multiple] { box-sizing: border-box; width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); color: var(--text); font-size: 11px; }
+.notification-form select[multiple] { height: 118px; }
+.pickup-delay-panel { color: var(--text); font-size: 10px; }
+.pickup-delay-panel p { margin: 3px 0; color: var(--muted); }
+.pickup-delay-panel .forecast-note { margin: 0; }
+.courier-alert-settings { display: grid; gap: 7px; padding-top: 8px; border-top: 1px solid var(--line); }
 .recommendations { display: grid; gap: 8px; }
 .recommendation { display: grid; grid-template-columns: 31px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 12px; }
 .recommendation-rank { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 10px; background: rgba(255, 191, 85, .1); color: var(--amber); font-size: 11px; font-weight: 800; }

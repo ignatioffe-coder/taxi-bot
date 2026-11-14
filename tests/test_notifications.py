@@ -41,6 +41,17 @@ class QuietHoursTests(unittest.TestCase):
         self.assertFalse(notifications.in_quiet_hours(now, "", ""))
         self.assertFalse(notifications.in_quiet_hours(now, "12:00", "12:00"))
 
+    def test_working_window_supports_overnight_and_optional_bounds(self):
+        self.assertTrue(
+            notifications.in_working_hours(datetime(2026, 1, 7, 23), "22:00", "06:00")
+        )
+        self.assertFalse(
+            notifications.in_working_hours(datetime(2026, 1, 7, 12), "22:00", "06:00")
+        )
+        self.assertTrue(
+            notifications.in_working_hours(datetime(2026, 1, 7, 12), "", "")
+        )
+
 
 class FrequencyTests(unittest.TestCase):
     def setUp(self):
@@ -89,6 +100,19 @@ class MessageTests(unittest.TestCase):
     def test_courier_message_says_delivery(self):
         forecast = forecast_with([{"district": "Тверской", "score": 90}])
         self.assertIn("доставку", notifications.build_demand_message("courier", forecast))
+
+    def test_courier_area_target_filters_demand_but_empty_selection_is_citywide(self):
+        forecast = forecast_with([
+            {"district": "Тверской", "score": 90},
+            {"district": "Арбат", "score": 80},
+        ])
+        targeted = notifications.build_demand_message(
+            "courier", forecast, ["Арбат"]
+        )
+        self.assertIn("Арбат", targeted)
+        self.assertNotIn("Тверской", targeted)
+        citywide = notifications.build_demand_message("courier", forecast, [])
+        self.assertIn("Тверской", citywide)
 
     def test_weather_message_only_for_strong_impact(self):
         strong = {"impact": 0.9, "text": "Дождь", "emoji": "🌧️"}
@@ -143,6 +167,29 @@ class TrafficMessageTests(unittest.TestCase):
         text = notifications.build_traffic_message(self._stats(["traffic"]), self.NOW)
         self.assertIn("пробки", text)
         self.assertIn("Тверской", text)
+
+    def test_courier_area_target_filters_location_specific_traffic(self):
+        stats = self._stats(["traffic"])
+        stats["Арбат"] = stats["Тверской"]
+        text = notifications.build_traffic_message(
+            stats, self.NOW, ["Арбат"]
+        )
+        self.assertIn("Арбат", text)
+        self.assertNotIn("Тверской", text)
+
+    def test_pickup_report_does_not_refresh_an_old_traffic_report(self):
+        stats = self._stats(["traffic", "pickup_delay"])
+        stats["Тверской"]["category_details"] = {
+            "traffic": {
+                "last_report_update": (
+                    self.NOW - timedelta(hours=5)
+                ).strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            "pickup_delay": {
+                "last_report_update": self.NOW.strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        }
+        self.assertIsNone(notifications.build_traffic_message(stats, self.NOW))
 
     def test_accident_and_closure_have_human_labels(self):
         text = notifications.build_traffic_message(

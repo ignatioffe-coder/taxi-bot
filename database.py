@@ -1,5 +1,6 @@
 """Работа с базой данных"""
 
+import json
 import sqlite3
 import time
 import uuid
@@ -35,6 +36,7 @@ REPORT_EXPIRY_MINUTES = {
     "many_orders": 120,
     "long_wait": 120,
     "restaurant_busy": 120,
+    "pickup_delay": 45,
     "order_problem": 120,
     "delivery_problem": 120,
     "traffic": 180,
@@ -399,9 +401,27 @@ def init_db():
             frequency TEXT NOT NULL DEFAULT 'daily'
                 CHECK (frequency IN ('immediate', 'hourly', 'daily')),
             quiet_start TEXT NOT NULL DEFAULT '',
-            quiet_end TEXT NOT NULL DEFAULT ''
+            quiet_end TEXT NOT NULL DEFAULT '',
+            watched_districts TEXT NOT NULL DEFAULT '[]',
+            work_start TEXT NOT NULL DEFAULT '',
+            work_end TEXT NOT NULL DEFAULT ''
         )
     """)
+    preference_columns = {
+        row[1] for row in cursor.execute(
+            "PRAGMA table_info(notification_preferences)"
+        ).fetchall()
+    }
+    for column in ("watched_districts", "work_start", "work_end"):
+        if column not in preference_columns:
+            column_type = (
+                "TEXT NOT NULL DEFAULT '[]'"
+                if column == "watched_districts"
+                else "TEXT NOT NULL DEFAULT ''"
+            )
+            cursor.execute(
+                f"ALTER TABLE notification_preferences ADD COLUMN {column} {column_type}"
+            )
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS notifications (
@@ -1156,7 +1176,8 @@ def get_work_summary(user_id: int, work_type: str, since: datetime) -> Dict:
             SELECT id, district, gross_income, tips, fuel_cost, commission_cost,
                    maintenance_cost, other_cost, rental_cost, insurance_cost,
                    tax_cost, depreciation_cost, charging_cost, connectivity_cost,
-                   hours_worked, distance_km, orders_count, timestamp
+                   hours_worked, distance_km, orders_count,
+                   orders_count_known, timestamp
             FROM work_shifts
             WHERE user_id = ? AND work_type = ? AND timestamp >= ?
             ORDER BY timestamp DESC, id DESC
@@ -1217,6 +1238,25 @@ def get_work_summary(user_id: int, work_type: str, since: datetime) -> Dict:
     orders_count = int(totals["orders_count"])
     hours_worked = round(float(totals["hours_worked"]), 2)
     net_income = round(gross_income + tips - total_expenses, 2)
+    with closing(sqlite3.connect(config.DB_PATH)) as conn:
+        courier_totals = conn.execute(
+            """
+            SELECT COALESCE(SUM(CASE WHEN orders_count_known = 1 THEN orders_count ELSE 0 END), 0),
+                   COALESCE(SUM(CASE WHEN orders_count_known = 1 THEN hours_worked ELSE 0 END), 0),
+                   COALESCE(SUM(CASE WHEN orders_count_known = 1
+                       THEN gross_income + tips - fuel_cost - commission_cost
+                         - maintenance_cost - other_cost - rental_cost
+                         - insurance_cost - tax_cost - charging_cost - connectivity_cost
+                       ELSE 0 END), 0),
+                   SUM(CASE WHEN orders_count_known = 1 THEN 1 ELSE 0 END)
+            FROM work_shifts
+            WHERE user_id = ? AND work_type = ? AND timestamp >= ?
+            """,
+            (user_id, work_type, since.strftime("%Y-%m-%d %H:%M:%S")),
+        ).fetchone()
+    known_orders = int(courier_totals[0] or 0)
+    known_order_hours = float(courier_totals[1] or 0)
+    known_order_net = float(courier_totals[2] or 0)
     weekday_efficiency = [
         {
             "weekday": int(row["weekday"]),
@@ -1253,6 +1293,20 @@ def get_work_summary(user_id: int, work_type: str, since: datetime) -> Dict:
             if orders_count else 0,
         "average_order_duration_minutes": round(hours_worked * 60 / orders_count, 2)
             if orders_count else 0,
+        "courier_insights": {
+            "recorded_net_per_hour": round(net_income / hours_worked, 2)
+                if hours_worked > 0 else None,
+            "orders_per_hour": round(known_orders / known_order_hours, 2)
+                if known_order_hours > 0 else None,
+            "recorded_net_per_order": round(known_order_net / known_orders, 2)
+                if known_orders > 0 else None,
+            "known_orders": known_orders,
+            "known_order_hours": round(known_order_hours, 2),
+            "distance_km": distance_km,
+            "cash_expenses_per_km": round(total_expenses / distance_km, 2)
+                if distance_km > 0 else None,
+            "known_order_shifts": int(courier_totals[3] or 0),
+        },
         "previous_period_net_income": round(float(previous_totals[0] or 0), 2),
         "previous_period_shifts": int(previous_totals[1] or 0),
         "weekday_efficiency": weekday_efficiency,
@@ -1424,6 +1478,9 @@ def get_driver_report_district_stats(
     if work_type not in {"taxi", "courier"}:
         raise ValueError("Unsupported work type")
     current_time = now or get_moscow_time()
+    corroboration_since = (
+        current_time - timedelta(minutes=30)
+    ).strftime("%Y-%m-%d %H:%M:%S")
     with closing(sqlite3.connect(config.DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -1441,9 +1498,26 @@ def get_driver_report_district_stats(
                 current_time.strftime("%Y-%m-%d %H:%M:%S"),
             ),
         ).fetchall()
+        category_rows = conn.execute(
+            """
+            SELECT district, category, COUNT(*) AS records,
+                   COUNT(DISTINCT user_id) AS reporters,
+                   COUNT(DISTINCT CASE WHEN created_at >= ?
+                       THEN user_id END) AS recent_reporters,
+                   MAX(created_at) AS last_update
+            FROM driver_reports
+            WHERE work_type = ? AND status = 'active' AND expires_at > ?
+            GROUP BY district, category
+            """,
+            (
+                corroboration_since,
+                work_type,
+                current_time.strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        ).fetchall()
 
     valid_districts = set(config.MOSCOW_DISTRICTS)
-    return {
+    result = {
         row["district"]: {
             "report_count": int(row["records"]),
             "reporters": int(row["reporters"]),
@@ -1456,6 +1530,18 @@ def get_driver_report_district_stats(
         for row in rows
         if row["district"] in valid_districts
     }
+    for row in category_rows:
+        if row["district"] not in result:
+            continue
+        result[row["district"]].setdefault("category_details", {})[
+            row["category"]
+        ] = {
+            "report_count": int(row["records"]),
+            "reporters": int(row["reporters"]),
+            "recent_reporters": int(row["recent_reporters"]),
+            "last_report_update": row["last_update"],
+        }
+    return result
 
 
 def get_driver_reports_for_admin(limit: int = 200) -> List[Dict]:
@@ -2056,15 +2142,26 @@ def get_notification_preferences(user_id: int) -> Dict:
             (user_id,),
         ).fetchone()
     preferences = dict(row)
+    try:
+        preferences["watched_districts"] = json.loads(
+            preferences.get("watched_districts") or "[]"
+        )
+    except (TypeError, ValueError):
+        preferences["watched_districts"] = []
     for field in NOTIFICATION_BOOLEAN_FIELDS:
         preferences[field] = bool(preferences[field])
     return preferences
 
 
 def save_notification_preferences(user_id: int, preferences: Dict) -> None:
-    fields = (*NOTIFICATION_BOOLEAN_FIELDS, "frequency", "quiet_start", "quiet_end")
+    fields = (
+        *NOTIFICATION_BOOLEAN_FIELDS, "frequency", "quiet_start", "quiet_end",
+        "watched_districts", "work_start", "work_end",
+    )
     values = [
         int(preferences[field]) if field in NOTIFICATION_BOOLEAN_FIELDS
+        else json.dumps(preferences[field], ensure_ascii=False)
+        if field == "watched_districts"
         else preferences[field]
         for field in fields
     ]
@@ -2091,6 +2188,7 @@ NOTIFICATION_RECIPIENT_FIELDS = (
     "traffic_events",
     "personal_recommendations",
     "financial_reminders",
+    "watched_districts",
 )
 
 
@@ -2112,7 +2210,9 @@ def get_notification_recipients() -> List[Dict]:
                    {", ".join(f"n.{field} AS {field}" for field in NOTIFICATION_RECIPIENT_FIELDS)},
                    n.frequency AS frequency,
                    n.quiet_start AS quiet_start,
-                   n.quiet_end AS quiet_end
+                   n.quiet_end AS quiet_end,
+                   n.work_start AS work_start,
+                   n.work_end AS work_end
             FROM driver_profiles p
             JOIN notification_preferences n ON n.user_id = p.user_id
             """
@@ -2120,8 +2220,14 @@ def get_notification_recipients() -> List[Dict]:
     recipients = []
     for row in rows:
         record = dict(row)
-        for field in NOTIFICATION_RECIPIENT_FIELDS:
+        for field in NOTIFICATION_BOOLEAN_FIELDS:
             record[field] = bool(record[field])
+        try:
+            record["watched_districts"] = json.loads(
+                record.get("watched_districts") or "[]"
+            )
+        except (TypeError, ValueError):
+            record["watched_districts"] = []
         recipients.append(record)
     return recipients
 
