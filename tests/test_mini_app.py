@@ -365,6 +365,78 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(quality["courier"]["evaluated"], 1)
         self.assertEqual(quality["courier"]["mean_absolute_error"], 20)
 
+    async def test_order_forecast_quality_uses_only_shifts_with_known_order_counts(self):
+        import database
+
+        district = config.MOSCOW_DISTRICTS[0]
+        generated_at = database.get_moscow_time().replace(
+            year=2026, month=1, day=1, hour=10, minute=0, second=0, microsecond=0
+        )
+        run_id = database.record_forecast_snapshot(
+            123456,
+            "courier",
+            {
+                "items": [{
+                    "district": district,
+                    "score": 80,
+                    "confidence": 70,
+                    "metric_type": "orders_per_hour",
+                    "orders_per_hour": 3,
+                    "net_income_per_hour": 100,
+                }]
+            },
+            generated_at,
+        )
+        with closing(sqlite3.connect(config.DB_PATH)) as conn, conn:
+            conn.executemany(
+                """
+                INSERT INTO work_shifts (
+                    user_id, work_type, district, orders_count, orders_count_known,
+                    hours_worked, timestamp
+                )
+                VALUES (123456, 'courier', ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        district,
+                        4,
+                        1,
+                        2,
+                        (generated_at + timedelta(days=2)).strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        ),
+                    ),
+                    (
+                        district,
+                        100,
+                        0,
+                        5,
+                        (generated_at + timedelta(days=3)).strftime(
+                            "%Y-%m-%d %H:%M:%S"
+                        ),
+                    ),
+                ],
+            )
+
+        database.evaluate_forecast_snapshots(
+            generated_at + timedelta(days=8, hours=1)
+        )
+        with closing(sqlite3.connect(config.DB_PATH)) as conn:
+            evaluation = conn.execute(
+                """
+                SELECT metric_type, observed_metric, absolute_error
+                FROM forecast_evaluations WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        self.assertEqual(evaluation[0], "orders_per_hour")
+        self.assertEqual(evaluation[1], 2)
+        self.assertEqual(evaluation[2], 1)
+        quality = database.get_forecast_quality_summary()
+        self.assertEqual(
+            quality["courier"]["metrics"]["orders_per_hour"]["evaluated"], 1
+        )
+
     async def test_district_catalog_requires_an_active_trial_or_subscription(self):
         response = await self.client.get("/api/districts")
         self.assertEqual(response.status, 401)
@@ -1110,6 +1182,8 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
                 "district": config.MOSCOW_DISTRICTS[0],
                 "gross_income": 1200,
                 "hours_worked": 4,
+                "orders_count": 0,
+                "orders_count_known": True,
                 "started_at": shift_start,
             },
         )
@@ -1117,6 +1191,8 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
 
         inputs = database.get_demand_forecast_inputs(123456, "courier")
         self.assertEqual(inputs["shifts"][0]["vehicle_type"], "bicycle")
+        self.assertEqual(inputs["shifts"][0]["orders_count"], 0)
+        self.assertEqual(inputs["shifts"][0]["orders_count_known"], 1)
         self.assertEqual(
             inputs["shifts"][0]["started_at"],
             shift_start.replace("T", " ") + ":00",
@@ -1171,8 +1247,11 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             columns = {
                 row[1] for row in conn.execute("PRAGMA table_info(work_shifts)")
             }
-            started_at, vehicle_type = conn.execute(
-                "SELECT started_at, vehicle_type FROM work_shifts WHERE user_id = ?",
+            started_at, vehicle_type, orders_count_known = conn.execute(
+                """
+                SELECT started_at, vehicle_type, orders_count_known
+                FROM work_shifts WHERE user_id = ?
+                """,
                 (123456,),
             ).fetchone()
             rate_limit_table = conn.execute(
@@ -1181,8 +1260,10 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             ).fetchone()
         self.assertIn("started_at", columns)
         self.assertIn("vehicle_type", columns)
+        self.assertIn("orders_count_known", columns)
         self.assertIsNone(started_at)
         self.assertEqual(vehicle_type, "")
+        self.assertEqual(orders_count_known, 0)
         self.assertIsNotNone(rate_limit_table)
 
     async def test_shift_rejects_invalid_values(self):

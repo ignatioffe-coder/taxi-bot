@@ -87,8 +87,44 @@ class DemandForecastingTests(unittest.TestCase):
         self.assertEqual(forecast["status"], "available")
         self.assertEqual(forecast["items"][0]["district"], self.district)
         self.assertEqual(forecast["items"][0]["net_income_per_hour"], 80)
+        self.assertEqual(forecast["items"][0]["metric_type"], "net_income_per_hour")
         self.assertEqual(forecast["items"][0]["score"], 100)
         self.assertEqual(forecast["items"][1]["score"], 0)
+
+    def test_courier_forecast_uses_known_orders_per_hour_when_history_is_sufficient(self):
+        other_district = config.MOSCOW_DISTRICTS[1]
+        shifts = [
+            {
+                "district": district,
+                "gross_income": income,
+                "hours_worked": 2,
+                "orders_count": orders,
+                "orders_count_known": True,
+                "timestamp": (self.now - timedelta(days=day)).isoformat(),
+            }
+            for district, income, order_counts in (
+                (self.district, 2000, (0, 2, 2)),
+                (other_district, 0, (8, 8, 8)),
+            )
+            for day, orders in zip((1, 2, 3), order_counts)
+        ]
+        shifts.append({
+            "district": self.district,
+            "gross_income": 50000,
+            "hours_worked": 1,
+            "orders_count": 100,
+            "orders_count_known": False,
+            "timestamp": (self.now - timedelta(days=4)).isoformat(),
+        })
+
+        forecast = build_forecast("courier", {"shifts": shifts}, now=self.now)
+
+        items = {item["district"]: item for item in forecast["items"]}
+        self.assertEqual(items[other_district]["metric_type"], "orders_per_hour")
+        self.assertEqual(items[other_district]["orders_per_hour"], 4)
+        self.assertEqual(items[other_district]["net_income_per_hour"], 0)
+        self.assertEqual(items[self.district]["orders_per_hour"], 0.67)
+        self.assertEqual(items[self.district]["sample_count"], 3)
 
     def test_courier_trend_compares_recent_and_previous_45_day_periods(self):
         shifts = [
@@ -193,6 +229,14 @@ class CourierHintTests(unittest.TestCase):
     def test_no_hints_when_everything_counted(self):
         forecast = build_forecast("courier", {"shifts": []}, now=self.now)
         self.assertEqual(forecast["hints"], [])
+
+    def test_unknown_order_count_produces_explanatory_hint(self):
+        forecast = build_forecast(
+            "courier",
+            {"shifts": [], "excluded": {"orders_count_unknown": 2}},
+            now=self.now,
+        )
+        self.assertTrue(any("не указано число заказов" in hint for hint in forecast["hints"]))
 
 
 if __name__ == "__main__":

@@ -137,6 +137,7 @@ def init_db():
             hours_worked REAL NOT NULL DEFAULT 0,
             distance_km REAL NOT NULL DEFAULT 0,
             orders_count INTEGER NOT NULL DEFAULT 0,
+            orders_count_known INTEGER NOT NULL DEFAULT 0,
             started_at TEXT,
             vehicle_type TEXT NOT NULL DEFAULT '',
             timestamp DATETIME NOT NULL
@@ -148,9 +149,13 @@ def init_db():
     for column in (
         "rental_cost", "insurance_cost", "tax_cost", "depreciation_cost",
         "charging_cost", "connectivity_cost", "distance_km", "orders_count",
+        "orders_count_known",
     ):
         if column not in shift_columns:
-            column_type = "INTEGER" if column == "orders_count" else "REAL"
+            column_type = (
+                "INTEGER" if column in {"orders_count", "orders_count_known"}
+                else "REAL"
+            )
             cursor.execute(
                 f"ALTER TABLE work_shifts ADD COLUMN {column} "
                 f"{column_type} NOT NULL DEFAULT 0"
@@ -1070,6 +1075,7 @@ def add_work_shift(
     connectivity_cost: float = 0,
     distance_km: float = 0,
     orders_count: int = 0,
+    orders_count_known: bool = False,
     started_at: str | None = None,
     vehicle_type: str = "",
 ) -> int:
@@ -1084,16 +1090,17 @@ def add_work_shift(
                     fuel_cost, commission_cost, maintenance_cost, other_cost,
                     rental_cost, insurance_cost, tax_cost, depreciation_cost,
                     charging_cost, connectivity_cost, hours_worked, distance_km,
-                    orders_count, started_at, vehicle_type, timestamp
+                    orders_count, orders_count_known, started_at, vehicle_type,
+                    timestamp
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id, work_type, district, gross_income, tips,
                     fuel_cost, commission_cost, maintenance_cost, other_cost,
                     rental_cost, insurance_cost, tax_cost, depreciation_cost,
                     charging_cost, connectivity_cost, hours_worked, distance_km,
-                    orders_count, started_at, vehicle_type,
+                    orders_count, int(orders_count_known), started_at, vehicle_type,
                     now.strftime("%Y-%m-%d %H:%M:%S"),
                 ),
             )
@@ -1546,6 +1553,9 @@ def get_admin_summary(now: int | None = None) -> Dict:
         "forecast_quality_by_district": {
             "taxi": get_forecast_quality_by_district("taxi"),
             "courier": get_forecast_quality_by_district("courier"),
+            "courier_orders_per_hour": get_forecast_quality_by_district(
+                "courier", metric_type="orders_per_hour"
+            ),
         },
         "district_coverage": {
             "taxi": get_district_coverage("taxi"),
@@ -1568,7 +1578,9 @@ def record_forecast_snapshot(
     recent_since = (
         current_time - FORECAST_SNAPSHOT_MIN_INTERVAL
     ).strftime("%Y-%m-%d %H:%M:%S")
-    metric_type = "coefficient" if work_type == "taxi" else "net_income_per_hour"
+    default_metric_type = (
+        "coefficient" if work_type == "taxi" else "net_income_per_hour"
+    )
     horizon_minutes = (
         int(TAXI_FORECAST_EVALUATION_DELAY.total_seconds() // 60)
         if work_type == "taxi"
@@ -1578,12 +1590,16 @@ def record_forecast_snapshot(
     records = []
     for item in items:
         district = item.get("district")
+        metric_type = (
+            item.get("metric_type") or default_metric_type
+            if work_type == "courier" else default_metric_type
+        )
         metric = (
             item.get("current_coefficient")
             if work_type == "taxi" and item.get("current_coefficient") is not None
             else item.get("historical_coefficient")
             if work_type == "taxi"
-            else item.get("net_income_per_hour")
+            else item.get(metric_type)
         )
         if (
             not isinstance(district, str)
@@ -1686,7 +1702,7 @@ def evaluate_forecast_snapshots(now: datetime | None = None) -> Dict[str, int]:
                 end_text = end.strftime("%Y-%m-%d %H:%M:%S")
                 items = conn.execute(
                     """
-                    SELECT district, predicted_metric
+                    SELECT district, metric_type, predicted_metric
                     FROM forecast_evaluations
                     WHERE run_id = ? AND status = 'pending'
                     """,
@@ -1703,26 +1719,43 @@ def evaluate_forecast_snapshots(now: datetime | None = None) -> Dict[str, int]:
                             (item["district"], start_text, end_text),
                         ).fetchone()[0]
                     else:
-                        observation = conn.execute(
-                            """
-                            SELECT
-                                SUM(gross_income + tips - fuel_cost
-                                    - commission_cost - maintenance_cost - other_cost
-                                    - rental_cost - insurance_cost - tax_cost
-                                    - charging_cost - connectivity_cost)
-                                    / NULLIF(SUM(hours_worked), 0)
-                            FROM work_shifts
-                            WHERE user_id = ? AND work_type = 'courier'
-                              AND district = ? AND timestamp >= ? AND timestamp <= ?
-                              AND hours_worked > 0
-                            """,
-                            (
-                                run["user_id"],
-                                item["district"],
-                                start_text,
-                                end_text,
-                            ),
-                        ).fetchone()[0]
+                        if item["metric_type"] == "orders_per_hour":
+                            observation = conn.execute(
+                                """
+                                SELECT SUM(orders_count) / NULLIF(SUM(hours_worked), 0)
+                                FROM work_shifts
+                                WHERE user_id = ? AND work_type = 'courier'
+                                  AND district = ? AND timestamp >= ? AND timestamp <= ?
+                                  AND hours_worked > 0 AND orders_count_known = 1
+                                """,
+                                (
+                                    run["user_id"],
+                                    item["district"],
+                                    start_text,
+                                    end_text,
+                                ),
+                            ).fetchone()[0]
+                        else:
+                            observation = conn.execute(
+                                """
+                                SELECT
+                                    SUM(gross_income + tips - fuel_cost
+                                        - commission_cost - maintenance_cost - other_cost
+                                        - rental_cost - insurance_cost - tax_cost
+                                        - charging_cost - connectivity_cost)
+                                        / NULLIF(SUM(hours_worked), 0)
+                                FROM work_shifts
+                                WHERE user_id = ? AND work_type = 'courier'
+                                  AND district = ? AND timestamp >= ? AND timestamp <= ?
+                                  AND hours_worked > 0
+                                """,
+                                (
+                                    run["user_id"],
+                                    item["district"],
+                                    start_text,
+                                    end_text,
+                                ),
+                            ).fetchone()[0]
                     status = "evaluated" if observation is not None else "insufficient_data"
                     error = (
                         abs(float(observation) - float(item["predicted_metric"]))
@@ -1784,11 +1817,12 @@ def get_forecast_quality_summary() -> Dict[str, Dict]:
             "evaluated": 0,
             "insufficient": 0,
             "mean_absolute_error": None,
+            "metrics": {},
         },
     }
     for row in rows:
-        item = result[row["work_type"]]
-        item.update({
+        item = {
+            "metric": row["metric_type"],
             "predictions": int(row["predictions"] or 0),
             "evaluated": int(row["evaluated"] or 0),
             "insufficient": int(row["insufficient"] or 0),
@@ -1796,16 +1830,25 @@ def get_forecast_quality_summary() -> Dict[str, Dict]:
                 round(float(row["mean_absolute_error"]), 2)
                 if row["mean_absolute_error"] is not None else None
             ),
-        })
+        }
+        if row["work_type"] == "taxi":
+            result["taxi"].update(item)
+        else:
+            result["courier"]["metrics"][row["metric_type"]] = item
+            if row["metric_type"] == "net_income_per_hour":
+                result["courier"].update(item)
     return result
 
 
 def get_forecast_quality_by_district(
-    work_type: str, limit: int = 8
+    work_type: str, limit: int = 8, metric_type: str | None = None
 ) -> List[Dict]:
     """Худшие по точности районы — где модель ошибается сильнее всего (ТЗ, п. 19)."""
     if work_type not in {"taxi", "courier"}:
         raise ValueError("Unsupported work type")
+    metric_type = metric_type or (
+        "coefficient" if work_type == "taxi" else "net_income_per_hour"
+    )
     with closing(sqlite3.connect(config.DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -1816,12 +1859,13 @@ def get_forecast_quality_by_district(
                    MAX(e.evaluated_at) AS last_evaluated_at
             FROM forecast_evaluations AS e
             JOIN forecast_runs AS r ON r.id = e.run_id
-            WHERE r.work_type = ? AND e.status = 'evaluated'
+            WHERE r.work_type = ? AND e.metric_type = ?
+              AND e.status = 'evaluated'
             GROUP BY e.district
             ORDER BY mean_absolute_error DESC
             LIMIT ?
             """,
-            (work_type, int(limit)),
+            (work_type, metric_type, int(limit)),
         ).fetchall()
     return [
         {
@@ -1904,7 +1948,8 @@ def get_demand_forecast_inputs(
             SELECT district, gross_income, tips, fuel_cost, commission_cost,
                    maintenance_cost, other_cost, rental_cost, insurance_cost,
                    tax_cost, depreciation_cost, charging_cost, connectivity_cost,
-                   hours_worked, started_at, vehicle_type, timestamp
+                   hours_worked, distance_km, orders_count, orders_count_known,
+                   started_at, vehicle_type, timestamp
             FROM work_shifts
             WHERE user_id = ?
               AND work_type = ?
@@ -1930,7 +1975,11 @@ def get_demand_forecast_inputs(
                     AS no_district,
                 SUM(CASE WHEN district IS NOT NULL AND district <> ''
                               AND hours_worked <= 0 THEN 1 ELSE 0 END)
-                    AS no_hours
+                    AS no_hours,
+                SUM(CASE WHEN district IS NOT NULL AND district <> ''
+                              AND hours_worked > 0
+                              AND orders_count_known = 0 THEN 1 ELSE 0 END)
+                    AS orders_count_unknown
             FROM work_shifts
             WHERE user_id = ? AND work_type = ?
               AND timestamp >= ? AND timestamp <= ?
@@ -1955,6 +2004,7 @@ def get_demand_forecast_inputs(
             "excluded": {
                 "no_district": int(counts["no_district"] or 0),
                 "no_hours": int(counts["no_hours"] or 0),
+                "orders_count_unknown": int(counts["orders_count_unknown"] or 0),
             },
             "other_direction_shifts": int(other_direction or 0),
         }

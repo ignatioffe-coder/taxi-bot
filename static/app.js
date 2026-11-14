@@ -292,22 +292,30 @@
     quality.replaceChildren();
     const metricLabels = {
       taxi: "Такси · средняя ошибка коэффициента",
-      courier: "Доставка · средняя ошибка дохода/ч",
+      net_income_per_hour: "Доставка · средняя ошибка дохода/ч",
+      orders_per_hour: "Доставка · средняя ошибка заказов/ч",
     };
     Object.entries(summary.forecast_quality || {}).forEach(([type, data]) => {
-      const row = document.createElement("div");
-      row.className = "admin-quality-row";
-      const title = document.createElement("span");
-      title.textContent = metricLabels[type] || type;
-      const result = document.createElement("strong");
-      const error = data.mean_absolute_error === null
-        ? "пока нет проверенных прогнозов"
-        : type === "taxi"
-          ? `${data.mean_absolute_error.toFixed(2)}x`
-          : `${currency.format(data.mean_absolute_error)}/ч`;
-      result.textContent = `${error} · ${data.evaluated || 0} оценено`;
-      row.append(title, result);
-      quality.appendChild(row);
+      const metrics = type === "courier" && Object.keys(data.metrics || {}).length
+        ? Object.values(data.metrics)
+        : [data];
+      metrics.forEach((metric) => {
+        const row = document.createElement("div");
+        row.className = "admin-quality-row";
+        const title = document.createElement("span");
+        title.textContent = metricLabels[metric.metric] || metricLabels[type] || type;
+        const result = document.createElement("strong");
+        const error = metric.mean_absolute_error === null
+          ? "пока нет проверенных прогнозов"
+          : type === "taxi"
+            ? `${metric.mean_absolute_error.toFixed(2)}x`
+            : metric.metric === "orders_per_hour"
+              ? `${metric.mean_absolute_error.toFixed(2)} заказов/ч`
+            : `${currency.format(metric.mean_absolute_error)}/ч`;
+        result.textContent = `${error} · ${metric.evaluated || 0} оценено`;
+        row.append(title, result);
+        quality.appendChild(row);
+      });
     });
 
     const coverage = summary.district_coverage || {};
@@ -325,7 +333,13 @@
         row.append(title, value);
         quality.appendChild(row);
       }
-      const rows = worst[type] || [];
+    });
+    [
+      ["taxi", "taxi", "Такси"],
+      ["courier", "courier", "Доставка · по доходу/ч"],
+      ["courier_orders_per_hour", "courier", "Доставка · по заказам/ч"],
+    ].forEach(([key, type, label]) => {
+      const rows = worst[key] || [];
       if (!rows.length) return;
       const block = document.createElement("div");
       block.className = "admin-quality-districts";
@@ -338,6 +352,8 @@
         line.className = "admin-quality-line";
         const error = type === "taxi"
           ? `${item.mean_absolute_error}x`
+          : key === "courier_orders_per_hour"
+            ? `${item.mean_absolute_error} заказов/ч`
           : `${currency.format(item.mean_absolute_error)}/ч`;
         line.textContent = `${item.district} — ${error} · ${item.evaluated} проверок`;
         block.appendChild(line);
@@ -986,15 +1002,18 @@
       name.textContent = item.district;
       const note = document.createElement("span");
       note.className = "recommendation-note";
+      const metricName = item.metric_type === "orders_per_hour"
+        ? "заказов/ч"
+        : "доход/ч";
       const trendLabels = forecast.work_type === "taxi" ? {
         rising: "коэффициент растёт",
         falling: "коэффициент снижается",
         steady: "коэффициент стабилен",
         unknown: "динамика неизвестна",
       } : {
-        rising: "доход/ч выше",
-        falling: "доход/ч ниже",
-        steady: "доход/ч стабилен",
+        rising: `${metricName} выше`,
+        falling: `${metricName} ниже`,
+        steady: `${metricName} стабилен`,
         unknown: "недостаточно истории для динамики",
       };
       if (item.method === "poi_baseline") {
@@ -1011,8 +1030,19 @@
       } else if (item.metric_label === "плотность заведений") {
         metric.textContent = "плотность кафе и магазинов";
       } else {
-        const periodLabel = item.recent_samples ? "Последние 45 дней" : "За 90 дней";
-        metric.textContent = `${periodLabel}: ${currency.format(item.net_income_per_hour || 0)}/ч`;
+        const periodLabel = {
+          similar_time: "похожие смены",
+          recent_45: "последние 45 дней",
+          history_90: "за 90 дней",
+        }[item.rate_period] || "за 90 дней";
+        const details = [];
+        if (item.orders_per_hour !== null && item.orders_per_hour !== undefined) {
+          details.push(`${item.orders_per_hour} заказов/ч`);
+        }
+        if (item.net_income_per_hour !== null && item.net_income_per_hour !== undefined) {
+          details.push(`${currency.format(item.net_income_per_hour)}/ч`);
+        }
+        metric.textContent = `Рейтинг по ${item.metric_label || "истории смен"} · ${periodLabel}: ${details.join(" · ")}`;
       }
       const track = document.createElement("div");
       track.className = "forecast-score-track";
@@ -1060,9 +1090,9 @@
       ? `Сейчас участвуют: ${used.join(", ")}.`
       : "Внешние данные сейчас недоступны, оценка построена по вашей истории.";
     const second = document.createElement("p");
-    second.textContent = "Балл 0–100 сравнивает районы между собой, это не число заказов. " +
-      "60 минут — основная оценка, 30 и 120 показывают ожидаемый сдвиг по типичному профилю суток. " +
-      "Пробки TomTom отражают дорожную обстановку, а не наблюдаемое число заказов.";
+    second.textContent = forecast.work_type === "courier"
+      ? "Балл 0–100 — относительная оценка районов по вашей истории смен и доступным сигналам, а не коэффициент Яндекс Про. Приложение не видит число активных курьеров и закрытый алгоритм сервиса. Погода, дорожная доступность, время, заведения, мероприятия и сообщения курьеров помогают оценить спрос, но не гарантируют число заказов."
+      : "Балл 0–100 сравнивает районы между собой, это не число заказов. 60 минут — основная оценка, 30 и 120 показывают ожидаемый сдвиг по типичному профилю суток. Пробки TomTom отражают дорожную обстановку, а не наблюдаемое число заказов.";
     block.append(summary, first, second);
     return block;
   }
@@ -1809,6 +1839,7 @@
           started_at: form.elements.started_at.value || null,
           distance_km: value("distance_km"),
           orders_count: Number(form.elements.orders_count.value || 0),
+          orders_count_known: form.elements.orders_count.value !== "",
         }),
       });
       const selectedDistrict = $("shift-district").value;
