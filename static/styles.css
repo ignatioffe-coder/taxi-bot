@@ -344,6 +344,7 @@ h3 { margin: 0; font-size: 15px; }
 }
 @media (max-width: 420px) {
   .notification-form .form-row { grid-template-columns: minmax(0, 1fr); }
+  .native-time-field { width: calc(100% - 14px); }
 }
 .admin-quality-districts { margin-top: 10px; }
 .admin-quality-line { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
