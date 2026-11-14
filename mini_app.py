@@ -39,6 +39,7 @@ REPORT_CATEGORIES = {
     },
     "courier": {
         "high_demand", "low_activity", "many_orders", "long_wait",
+        "few_couriers", "many_couriers",
         "restaurant_busy", "order_problem", "delivery_problem",
         "traffic", "accident", "road_closure",
     },
@@ -315,6 +316,7 @@ async def dashboard(request: web.Request) -> web.Response:
     live_factors["reports"] = crowd_signals.district_multipliers(
         report_stats, config.get_moscow_time()
     )
+    live_factors["report_details"] = report_stats
     forecast = await asyncio.to_thread(
         demand_forecasting.build_forecast,
         work_type,
