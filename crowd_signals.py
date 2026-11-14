@@ -21,10 +21,12 @@ CATEGORY_EFFECT = {
     "high_demand": 0.070,
     "many_orders": 0.055,
     "few_cars": 0.045,
+    "few_couriers": 0.075,
     # спрос ниже обычного
     "low_demand": -0.055,
     "low_activity": -0.050,
     "long_wait": -0.030,
+    "many_couriers": -0.075,
     # дорожная обстановка (ТЗ, п. 14)
     "traffic": -0.060,
     "accident": -0.080,

@@ -129,6 +129,63 @@ def _traffic_suffix(factors: dict) -> str:
     )
 
 
+def _courier_item_signals(
+    factors: dict, district: str, metric_type: str
+) -> list[str]:
+    if metric_type == "poi_baseline":
+        signals = ["Плотность кафе и магазинов"]
+    elif metric_type == "orders_per_hour":
+        signals = ["Личные заказы/ч"]
+    else:
+        signals = ["Личный доход/ч"]
+
+    _, weather_label = _weather_multiplier(factors, "courier")
+    if weather_label:
+        signals.append("Погодный спрос")
+
+    for key, label in (
+        ("events", "Событие рядом"),
+        ("airports", "Аэропорт рядом"),
+    ):
+        try:
+            if float((factors.get(key) or {}).get(district, 0)) > 0:
+                signals.append(label)
+        except (TypeError, ValueError):
+            continue
+
+    try:
+        if float((factors.get("traffic") or {}).get(district, 0)) > 0:
+            signals.append("Дорожные инциденты")
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        reports = float((factors.get("reports") or {}).get(district, 1))
+    except (TypeError, ValueError):
+        reports = 1
+    categories = set(
+        ((factors.get("report_details") or {}).get(district) or {}).get(
+            "report_categories"
+        ) or []
+    )
+    if reports > 1.005:
+        if "few_couriers" in categories:
+            signals.append("Мало курьеров")
+        elif "many_orders" in categories:
+            signals.append("Много заказов")
+        else:
+            signals.append("Сообщения: спрос выше")
+    elif reports < 0.995:
+        if "many_couriers" in categories:
+            signals.append("Высокая конкуренция")
+        elif "long_wait" in categories:
+            signals.append("Долгое ожидание")
+        else:
+            signals.append("Сообщения: есть сложности")
+
+    return signals[:6]
+
+
 
 def _parse_timestamp(value) -> datetime | None:
     if isinstance(value, datetime):
@@ -352,6 +409,9 @@ def _baseline_items(
             "historical_samples": 0,
             "poi_index": index,
             "metric_label": "плотность заведений",
+            "signals": _courier_item_signals(
+                factors, district, "poi_baseline"
+            ),
             "method": "poi_baseline",
             "horizons": _horizon_scores(score, now, "courier"),
         })
@@ -740,6 +800,11 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             "historical_samples": historical_samples,
             "metric_type": (
                 "orders_per_hour" if use_order_rate else "net_income_per_hour"
+            ),
+            "signals": _courier_item_signals(
+                factors,
+                district,
+                "orders_per_hour" if use_order_rate else "net_income_per_hour",
             ),
             "rate_period": rate_period,
             "metric_label": "заказов/ч" if use_order_rate else "чистый доход/ч",

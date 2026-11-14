@@ -13,6 +13,8 @@
     few_cars: "Мало машин",
     low_activity: "Низкая активность",
     many_orders: "Много заказов",
+    few_couriers: "Мало курьеров",
+    many_couriers: "Курьеров больше спроса",
     long_wait: "Долгое ожидание",
     restaurant_busy: "Задержка в ресторане",
     order_problem: "Проблема с заказом",
@@ -28,6 +30,7 @@
     ],
     courier: [
       "high_demand", "low_activity", "many_orders", "long_wait",
+      "few_couriers", "many_couriers",
       "restaurant_busy", "order_problem", "delivery_problem",
       "traffic", "accident", "road_closure",
     ],
@@ -1051,6 +1054,19 @@
       fill.style.width = `${displayScore}%`;
       track.appendChild(fill);
       info.append(name, note, metric);
+      if (item.signals && item.signals.length) {
+        const signalList = document.createElement("div");
+        signalList.className = "forecast-signals";
+        item.signals.forEach((label, signalIndex) => {
+          const signal = document.createElement("span");
+          signal.className = signalIndex === 0
+            ? "forecast-signal forecast-signal-primary"
+            : "forecast-signal";
+          signal.textContent = label;
+          signalList.appendChild(signal);
+        });
+        info.appendChild(signalList);
+      }
       if (item.score_base !== undefined && Number(item.score_base) !== Number(item.score)) {
         const delta = document.createElement("span");
         delta.className = "score-delta";
