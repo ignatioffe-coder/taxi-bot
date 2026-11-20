@@ -33,7 +33,7 @@ YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "").strip()
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "").strip()
 
 # ID администратора (твой или брата) — для отчётов и управления
-ADMIN_IDS = [7925732814]  # Сделано списком, как в основном коде
+ADMIN_IDS = [7925732814, 6965289477]
 
 # Город
 CITY = "Москва"
