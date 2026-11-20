@@ -532,6 +532,38 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             later_access["trial_started_at"], access["trial_started_at"]
         )
 
+    async def test_configured_admin_has_access_without_subscription(self):
+        import database
+
+        admin_id = config.ADMIN_IDS[0]
+        admin_headers = {
+            "X-Telegram-Init-Data": signed_init_data(
+                {"id": admin_id, "first_name": "Admin"},
+                config.BOT_TOKEN,
+                int(time.time()),
+            )
+        }
+        await self.complete_onboarding(admin_headers)
+        with closing(sqlite3.connect(self.db_path)) as conn:
+            conn.execute(
+                "UPDATE user_subscriptions SET trial_expires_at = 0 WHERE user_id = ?",
+                (admin_id,),
+            )
+            conn.commit()
+
+        profile_response = await self.client.get(
+            "/api/profile", headers=admin_headers
+        )
+        profile = await profile_response.json()
+        self.assertEqual(profile["subscription"]["status"], "admin")
+        self.assertTrue(profile["subscription"]["active"])
+
+        dashboard_response = await self.client.get(
+            "/api/dashboard?work_type=taxi&period=week",
+            headers=admin_headers,
+        )
+        self.assertEqual(dashboard_response.status, 200)
+
     async def test_yookassa_payment_requires_terms_and_creates_fixed_price_payment(self):
         import database
 

@@ -498,8 +498,18 @@ def check_api_rate_limit(
 
 
 def get_subscription_access(user_id: int, now: int | None = None) -> Dict:
-    """Create the one-time trial on first eligible use and return access state."""
+    """Return admin access or create the one-time trial for regular users."""
     current_time = int(time.time()) if now is None else now
+    if user_id in config.ADMIN_IDS:
+        return {
+            "status": "admin",
+            "active": True,
+            "trial_started_at": 0,
+            "trial_expires_at": 0,
+            "paid_until": 0,
+            "auto_renew": False,
+            "payment_method_saved": False,
+        }
     with closing(sqlite3.connect(config.DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row
         with conn:
