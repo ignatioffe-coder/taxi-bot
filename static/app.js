@@ -132,7 +132,12 @@
       return;
     }
 
-    if (access.status === "trial") {
+    if (access.status === "admin") {
+      badge.textContent = "Администратор";
+      badge.className = "subscription-badge";
+      info.textContent = "У тебя постоянный доступ ко всем функциям MOVENTA.";
+      button.hidden = true;
+    } else if (access.status === "trial") {
       badge.textContent = "Пробный доступ";
       badge.className = "subscription-badge trial";
       info.textContent = `Бесплатно до ${endDate(access.trial_expires_at)}. Можно оплатить подписку сразу — 30-дневный период начнётся после оплаты.`;
