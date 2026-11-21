@@ -535,7 +535,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_configured_admin_has_access_without_subscription(self):
         import database
 
-        admin_id = config.ADMIN_IDS[0]
+        admin_id = config.ADMIN_IDS[-1]
         admin_headers = {
             "X-Telegram-Init-Data": signed_init_data(
                 {"id": admin_id, "first_name": "Admin"},
