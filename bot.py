@@ -17,6 +17,7 @@ from aiogram.types import (
 
 import config
 import database
+import notifications
 import subscriptions
 import yookassa
 
