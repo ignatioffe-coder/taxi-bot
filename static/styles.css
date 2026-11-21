@@ -299,8 +299,10 @@ h3 { margin: 0; font-size: 15px; }
 .notification-option { display: flex; min-height: 38px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px; border-radius: 10px; background: var(--surface-raised); color: var(--text); font-size: 10px; }
 .notification-option > span { min-width: 0; overflow-wrap: anywhere; }
 .notification-option input { width: 18px; height: 18px; flex: 0 0 auto; margin: 0; accent-color: var(--mint); }
-.notification-form input[type=time], .notification-form select { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; height: 43px; padding: 0 11px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-raised); color: var(--text); font-size: 11px; }
-.notification-schedule { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+.notification-form input[type=time], .notification-form select { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; height: 38px; padding: 0 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); color: var(--text); font-size: 11px; }
+.notification-schedule { grid-template-columns: minmax(0, 1fr); align-items: start; }
+.notification-schedule .field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 42%); align-items: center; gap: 8px; min-height: 38px; padding: 0 10px; border-radius: 10px; background: var(--surface-raised); }
+.notification-schedule .field > label { margin: 0; color: var(--text); font-size: 13px; font-weight: 600; line-height: 1.25; }
 .profile-subscription-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .profile-subscription-heading .eyebrow { margin-bottom: 4px; }
 .profile-subscription-heading h3 { font-size: 13px; }
@@ -368,7 +370,7 @@ h3 { margin: 0; font-size: 15px; }
 }
 @media (max-width: 420px) {
   .notification-form .form-row { grid-template-columns: minmax(0, 1fr); }
-  .native-time-field { width: calc(100% - 14px); }
+  .native-time-field { width: 100%; }
 }
 .admin-quality-districts { margin-top: 10px; }
 .admin-quality-line { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
