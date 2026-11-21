@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#11151b">
   <title>MOVENTA</title>
-  <link rel="stylesheet" href="/static/styles.css?v=37">
+  <link rel="stylesheet" href="/static/styles.css?v=38">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="/static/app.js?v=35" defer></script>
 </head>
@@ -239,7 +239,7 @@
     </section>
 
     <section class="view" id="view-profile">
-      <div class="page-intro"><p class="eyebrow">ТВОИ ДАННЫЕ</p><h2>Профиль водителя</h2><p>Сохрани информацию о транспорте и сроках документов. Напомним в Telegram за 7 дней, за 1 день и в день окончания.</p></div>
+      <div class="page-intro"><p class="eyebrow">ТВОИ ДАННЫЕ</p><h2>Профиль водителя</h2><p>Работа, уведомления и настройки аккаунта.</p></div>
       <section class="profile-identity"><span class="avatar" id="profile-avatar">В</span><div><p class="eyebrow">АККАУНТ TELEGRAM</p><strong id="profile-name">Водитель</strong></div></section>
       <section class="profile-directions-card">
         <div class="section-heading"><div><p class="eyebrow">НАПРАВЛЕНИЯ</p><h3>Твоя работа</h3></div></div>
@@ -297,8 +297,8 @@
         <button id="save-profile" class="primary-button" type="submit">Сохранить профиль <span>→</span></button>
         <p id="profile-message" class="form-message" role="status"></p>
       </form>
-      <section class="notification-card">
-        <div class="section-heading"><div><p class="eyebrow">УВЕДОМЛЕНИЯ</p><h3>Что присылать</h3></div></div>
+      <details class="notification-card">
+        <summary class="profile-section-summary"><span><small class="eyebrow">УВЕДОМЛЕНИЯ</small><strong>Что присылать</strong></span></summary>
         <p>Присылаем, когда спрос растёт, начинается непогода или появились сообщения о пробках и ДТП. Настройки сохраняются в профиле, «тихие часы» и частота соблюдаются.</p>
         <form id="notification-form" class="notification-form">
           <label class="notification-option"><span>Изменения спроса</span><input type="checkbox" name="demand_changes"></label>
@@ -313,28 +313,29 @@
             <div class="field native-time-field"><label for="quiet-start">Не беспокоить с</label><input id="quiet-start" name="quiet_start" type="time"></div>
             <div class="field native-time-field"><label for="quiet-end">Не беспокоить до</label><input id="quiet-end" name="quiet_end" type="time"></div>
           </div>
-          <div id="courier-alert-settings" class="courier-alert-settings">
-            <label for="watched-districts">Районы для курьерских уведомлений <span class="optional">если ничего не выбрано — весь город</span></label>
+          <details id="courier-alert-settings" class="courier-alert-settings">
+            <summary>Районы и рабочее время курьера</summary>
+            <label for="watched-districts">Выбери районы <span class="optional">если ничего не выбрано — весь город</span></label>
             <select id="watched-districts" name="watched_districts" multiple size="4"></select>
             <div class="form-row notification-schedule">
               <div class="field native-time-field"><label for="work-start">Рабочие уведомления с</label><input id="work-start" name="work_start" type="time"></div>
               <div class="field native-time-field"><label for="work-end">до</label><input id="work-end" name="work_end" type="time"></div>
             </div>
             <p class="field-hint">Окно действует только на курьерские уведомления и дополняет «не беспокоить».</p>
-          </div>
+          </details>
           <button class="primary-button" type="submit">Сохранить настройки <span>→</span></button>
         </form>
         <p id="notification-message" class="form-message" role="status"></p>
-      </section>
-      <section class="privacy-card">
-        <div class="section-heading"><div><p class="eyebrow">КОНФИДЕНЦИАЛЬНОСТЬ</p><h3>Твои данные</h3></div></div>
+      </details>
+      <details class="privacy-card">
+        <summary class="profile-section-summary"><span><small class="eyebrow">КОНФИДЕНЦИАЛЬНОСТЬ</small><strong>Твои данные</strong></span></summary>
         <p>Можно скачать копию или удалить данные приложения. Перед удалением активной платной подписки сначала отключи автопродление и дождись окончания оплаченного периода.</p>
         <div class="privacy-actions">
           <button id="export-data" class="text-button" type="button">Скачать копию</button>
           <button id="delete-data" class="text-button danger-button" type="button">Удалить данные</button>
         </div>
         <p id="privacy-message" class="form-message" role="status"></p>
-      </section>
+      </details>
     </section>
 
     <footer class="app-footer">Доходы и расходы видны только тебе</footer>
