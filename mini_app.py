@@ -146,6 +146,17 @@ async def api_rate_limit_middleware(
     return await handler(request)
 
 
+@web.middleware
+async def static_no_store_middleware(
+    request: web.Request,
+    handler,
+) -> web.StreamResponse:
+    response = await handler(request)
+    if request.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def _admin_user(request: web.Request) -> dict:
     user = _authenticated_user(request)
     if user["id"] not in config.ADMIN_IDS:
@@ -1108,7 +1119,12 @@ async def delete_personal_data(request: web.Request) -> web.Response:
 
 
 def create_app() -> web.Application:
-    app = web.Application(middlewares=[api_rate_limit_middleware])
+    app = web.Application(
+        middlewares=[
+            api_rate_limit_middleware,
+            static_no_store_middleware,
+        ]
+    )
     app.router.add_get("/", index)
     app.router.add_static("/static/", path=STATIC_DIR)
     app.router.add_get("/api/districts", district_catalog)

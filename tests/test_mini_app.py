@@ -814,6 +814,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
 
         response = await self.client.get("/static/app.js")
         self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
         script = await response.text()
         self.assertIn("Telegram.WebApp", script)
         self.assertIn("api-maps.yandex.ru/2.1/", script)
