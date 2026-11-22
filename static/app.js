@@ -677,7 +677,7 @@
     const delivered = $("delivered-district");
     const selectedDelivery = delivered.value;
     delivered.replaceChildren(
-      new Option("Выбери район доставки", ""),
+      new Option(workType === "courier" ? "Выбери район доставки" : "Выбери район", ""),
       ...allDistricts.map((name) => new Option(name, name)),
     );
     delivered.value = selectedDelivery;
@@ -1009,6 +1009,8 @@
     $("courier-shift-insights").hidden = workType !== "courier";
     $("after-delivery").hidden = workType !== "courier";
     $("pickup-delay-panel").hidden = workType !== "courier";
+    $("delivered-district-label").textContent = "После доставки в районе";
+    $("delivered-district").options[0].textContent = "Выбери район доставки";
     $("courier-alert-settings").hidden = workType !== "courier";
     renderPickupDelaySignals(forecast);
     renderAfterDeliveryRecommendation(forecast);
