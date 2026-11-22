@@ -1486,9 +1486,6 @@
       // Отключённые пункты («скоро») всегда сохраняются как выключенные
       input.checked = input.disabled ? false : Boolean(notifications[field]);
     });
-    notificationForm.elements.frequency.value = notifications.frequency || "daily";
-    notificationForm.elements.quiet_start.value = notifications.quiet_start || "";
-    notificationForm.elements.quiet_end.value = notifications.quiet_end || "";
     watchedDistricts = Array.isArray(notifications.watched_districts)
       ? notifications.watched_districts
       : [];
@@ -1884,9 +1881,6 @@
     const payload = Object.fromEntries(
       fields.map((field) => [field, form.elements[field].checked]),
     );
-    payload.frequency = form.elements.frequency.value;
-    payload.quiet_start = form.elements.quiet_start.value;
-    payload.quiet_end = form.elements.quiet_end.value;
     payload.watched_districts = Array.from(
       form.elements.watched_districts.selectedOptions,
       (option) => option.value,
