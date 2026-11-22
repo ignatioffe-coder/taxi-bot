@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#11151b">
   <title>MOVENTA</title>
-  <link rel="stylesheet" href="/static/styles.css?v=42">
+  <link rel="stylesheet" href="/static/styles.css?v=43">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/static/app.js?v=36" defer></script>
+  <script src="/static/app.js?v=37" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -306,11 +306,6 @@
           <label class="notification-option"><span>Сообщения водителей о дорогах</span><input type="checkbox" name="traffic_events"></label>
           <label class="notification-option"><span>Персональные рекомендации</span><input type="checkbox" name="personal_recommendations"></label>
           <label class="notification-option"><span>Напоминания о документах</span><input type="checkbox" name="financial_reminders"></label>
-          <div class="form-row notification-schedule">
-            <div class="field"><label for="notification-frequency">Частота новых уведомлений</label><select id="notification-frequency" name="frequency"><option value="immediate">Сразу</option><option value="hourly">Не чаще раза в час</option><option value="daily">Ежедневно</option></select></div>
-            <div class="field native-time-field"><label for="quiet-start">Не беспокоить с</label><input id="quiet-start" name="quiet_start" type="time"></div>
-            <div class="field native-time-field"><label for="quiet-end">Не беспокоить до</label><input id="quiet-end" name="quiet_end" type="time"></div>
-          </div>
           <details id="courier-alert-settings" class="courier-alert-settings">
             <summary>Районы и рабочее время курьера</summary>
             <label for="watched-districts">Выбери районы <span class="optional">если ничего не выбрано — весь город</span></label>
@@ -319,7 +314,7 @@
               <div class="field native-time-field"><label for="work-start">Рабочие уведомления с</label><input id="work-start" name="work_start" type="time"></div>
               <div class="field native-time-field"><label for="work-end">до</label><input id="work-end" name="work_end" type="time"></div>
             </div>
-            <p class="field-hint">Окно действует только на курьерские уведомления и дополняет «не беспокоить».</p>
+            <p class="field-hint">Окно действует только на курьерские уведомления.</p>
           </details>
           <button class="primary-button" type="submit">Сохранить настройки <span>→</span></button>
         </form>

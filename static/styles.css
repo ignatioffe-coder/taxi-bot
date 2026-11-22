@@ -305,6 +305,8 @@ h3 { margin: 0; font-size: 15px; }
 .notification-schedule .field > label { flex: 1 1 auto; min-width: 0; margin: 0; color: var(--text); font-size: 13px; font-weight: 600; line-height: 1.25; }
 .notification-schedule .field > select,
 .notification-schedule .field > input { flex: 0 0 42%; width: 42%; }
+#shift-start-field { box-sizing: border-box; width: calc(50% - 4.5px); max-width: calc(50% - 4.5px); }
+#shift-start-field input { box-sizing: border-box; width: 100%; max-width: 100%; }
 .profile-subscription-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .profile-subscription-heading .eyebrow { margin-bottom: 4px; }
 .profile-subscription-heading h3 { font-size: 13px; }
@@ -373,6 +375,7 @@ h3 { margin: 0; font-size: 15px; }
 @media (max-width: 420px) {
   .notification-form .form-row { grid-template-columns: minmax(0, 1fr); }
   .native-time-field { width: 100%; }
+  #shift-start-field { width: 100%; max-width: 100%; }
 }
 .admin-quality-districts { margin-top: 10px; }
 .admin-quality-line { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
