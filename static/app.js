@@ -17,7 +17,7 @@
     many_couriers: "Курьеров больше спроса",
     long_wait: "Долгое ожидание",
     restaurant_busy: "Задержка в ресторане",
-    pickup_delay: "Ожидание при получении",
+    pickup_delay: "Ожидание заказа",
     order_problem: "Проблема с заказом",
     delivery_problem: "Проблема с доставкой",
     traffic: "Пробка",
@@ -677,7 +677,7 @@
     const delivered = $("delivered-district");
     const selectedDelivery = delivered.value;
     delivered.replaceChildren(
-      new Option(workType === "courier" ? "Выбери район доставки" : "Выбери район", ""),
+      new Option(workType === "courier" ? "Выбери район доставки" : "Выбери район высадки пассажира", ""),
       ...allDistricts.map((name) => new Option(name, name)),
     );
     delivered.value = selectedDelivery;
@@ -1009,8 +1009,12 @@
     $("courier-shift-insights").hidden = workType !== "courier";
     $("after-delivery").hidden = workType !== "courier";
     $("pickup-delay-panel").hidden = workType !== "courier";
-    $("delivered-district-label").textContent = "После доставки в районе";
-    $("delivered-district").options[0].textContent = "Выбери район доставки";
+    $("delivered-district-label").textContent = workType === "taxi"
+      ? "После высадки пассажира в районе"
+      : "После доставки в районе";
+    $("delivered-district").options[0].textContent = workType === "taxi"
+      ? "Выбери район высадки пассажира"
+      : "Выбери район доставки";
     $("courier-alert-settings").hidden = workType !== "courier";
     renderPickupDelaySignals(forecast);
     renderAfterDeliveryRecommendation(forecast);
@@ -1163,7 +1167,7 @@
     const originName = $("delivered-district").value;
     const origin = districtCenters[originName];
     if (!origin) {
-      result.textContent = "Выбери район доставки, чтобы посмотреть близкие районы.";
+      result.textContent = "Выбери район высадки пассажира, чтобы посмотреть ближайшие выгодные районы.";
       return;
     }
     if (forecast.status !== "available") {
