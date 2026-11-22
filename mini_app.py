@@ -578,9 +578,11 @@ async def save_notification_preferences(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text="Request body must be valid JSON")
     required = {
         *database.NOTIFICATION_BOOLEAN_FIELDS,
-        "frequency", "quiet_start", "quiet_end",
     }
-    targeted_fields = {"watched_districts", "work_start", "work_end"}
+    targeted_fields = {
+        "frequency", "quiet_start", "quiet_end",
+        "watched_districts", "work_start", "work_end",
+    }
     if (
         not isinstance(payload, dict)
         or not required.issubset(payload)
@@ -590,6 +592,9 @@ async def save_notification_preferences(request: web.Request) -> web.Response:
     saved_preferences = await asyncio.to_thread(
         database.get_notification_preferences, user["id"]
     )
+    payload.setdefault("frequency", saved_preferences["frequency"])
+    payload.setdefault("quiet_start", saved_preferences["quiet_start"])
+    payload.setdefault("quiet_end", saved_preferences["quiet_end"])
     payload.setdefault("watched_districts", saved_preferences["watched_districts"])
     payload.setdefault("work_start", saved_preferences["work_start"])
     payload.setdefault("work_end", saved_preferences["work_end"])
