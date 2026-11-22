@@ -305,7 +305,7 @@ h3 { margin: 0; font-size: 15px; }
 .notification-schedule .field > label { flex: 1 1 auto; min-width: 0; margin: 0; color: var(--text); font-size: 13px; font-weight: 600; line-height: 1.25; }
 .notification-schedule .field > select,
 .notification-schedule .field > input { flex: 0 0 42%; width: 42%; }
-#shift-start-field { box-sizing: border-box; width: calc(50% - 4.5px); max-width: calc(50% - 4.5px); }
+#shift-start-field { box-sizing: border-box; width: 100%; max-width: 100%; }
 #shift-start-field input { box-sizing: border-box; width: 100%; max-width: 100%; }
 .profile-subscription-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .profile-subscription-heading .eyebrow { margin-bottom: 4px; }
