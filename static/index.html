@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#11151b">
   <title>MOVENTA</title>
-  <link rel="stylesheet" href="/static/styles.css?v=40">
+  <link rel="stylesheet" href="/static/styles.css?v=41">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="/static/app.js?v=35" defer></script>
 </head>
@@ -189,9 +189,7 @@
       <div class="page-intro"><p class="eyebrow">ЛИЧНЫЕ ФИНАНСЫ</p><h2>Новая смена</h2><p>Запиши выручку и расходы, чтобы видеть реальный доход после затрат.</p></div>
       <form id="shift-form" class="form-card data-form">
         <div class="form-heading"><span class="form-icon">₽</span><div><p class="eyebrow">ИТОГИ РАБОТЫ</p><h3>Доходы</h3></div></div>
-        <label for="shift-district">Район работы <span class="optional">необязательно</span></label>
-        <select id="shift-district" name="district"><option value="">Не указывать</option></select>
-        <p class="field-hint">Район нужен, чтобы смена попала в персональный прогноз районов.</p>
+        <div class="field"><label for="shift-district">Район работы <span class="optional">необязательно</span></label><select id="shift-district" name="district"><option value="">Не указывать</option></select><p class="field-hint">Район нужен, чтобы смена попала в персональный прогноз районов.</p></div>
         <div class="form-row">
           <div class="field"><label for="gross-income-input">Выручка, ₽</label><input id="gross-income-input" name="gross_income" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="Например, 8500" required></div>
           <div class="field"><label for="tips-input">Чаевые, ₽</label><input id="tips-input" name="tips" type="number" min="0" max="1000000" step="1" inputmode="decimal" placeholder="0"></div>
