@@ -1318,7 +1318,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         profile["vehicle_type"] = "bicycle"
         database.save_driver_profile(123456, profile)
         shift_start = (
-            database.get_moscow_time() - timedelta(hours=4)
+            database.get_moscow_time() - timedelta(hours=1)
         ).strftime("%Y-%m-%dT%H:%M")
         response = await self.client.post(
             "/api/shifts",
@@ -1495,6 +1495,29 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
                 "hours_worked": 5,
             },
         )
+        now = int(time.time())
+        with closing(sqlite3.connect(config.DB_PATH)) as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO yookassa_payments (
+                        payment_ref, user_id, kind, idempotence_key,
+                        period_start, status, created_at, updated_at
+                    ) VALUES (?, ?, 'initial', ?, ?, 'pending', ?, ?)
+                    """,
+                    ("export-test-payment", 123456, "export-test-key",
+                     now, now, now),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO notifications (
+                        user_id, kind, text, sent_at, payload
+                    ) VALUES (?, 'test', 'export test', ?, '')
+                    """,
+                    (123456, database.get_moscow_time().strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    )),
+                )
         database.add_user(987654, "other", "Other", "")
         database.add_work_shift(
             987654, "taxi", None, 1000, 0, 0, 0, 0, 0, 1
@@ -1508,6 +1531,8 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         exported = await export_response.json()
         self.assertEqual(exported["user"]["user_id"], 123456)
         self.assertEqual(len(exported["shifts"]), 1)
+        self.assertEqual(len(exported["yookassa_payments"]), 1)
+        self.assertEqual(len(exported["notifications"]), 1)
 
         with closing(sqlite3.connect(config.DB_PATH)) as conn:
             with conn:
@@ -1549,6 +1574,40 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             )["shifts"],
             1,
         )
+        with closing(sqlite3.connect(config.DB_PATH)) as conn:
+            for table in ("yookassa_payments", "notifications"):
+                remaining = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE user_id = ?",
+                    (123456,),
+                ).fetchone()[0]
+                self.assertEqual(remaining, 0)
+
+    async def test_backdated_shift_uses_started_at_for_period_totals(self):
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        import database
+
+        now = database.get_moscow_time()
+        old_start = (now - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+        shift_id = database.add_work_shift(
+            123456, "taxi", None, 1000, 0, 0, 0, 0, 0, 5,
+            started_at=old_start,
+        )
+        self.assertGreater(shift_id, 0)
+
+        week_summary = database.get_work_summary(
+            123456,
+            "taxi",
+            now - timedelta(days=7),
+        )
+        month_summary = database.get_work_summary(
+            123456,
+            "taxi",
+            now - timedelta(days=30),
+        )
+        self.assertEqual(week_summary["shifts"], 0)
+        self.assertEqual(month_summary["shifts"], 1)
+        self.assertEqual(month_summary["gross_income"], 1000)
 
     async def test_onboarding_saves_name_and_work_type_only_once(self):
         headers = {"X-Telegram-Init-Data": self.init_data}

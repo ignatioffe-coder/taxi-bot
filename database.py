@@ -1161,7 +1161,8 @@ def get_work_summary(user_id: int, work_type: str, since: datetime) -> Dict:
                    COALESCE(SUM(distance_km), 0) AS distance_km,
                    COALESCE(SUM(orders_count), 0) AS orders_count
             FROM work_shifts
-            WHERE user_id = ? AND work_type = ? AND timestamp >= ?
+            WHERE user_id = ? AND work_type = ?
+              AND COALESCE(NULLIF(started_at, ''), timestamp) >= ?
             """,
             (user_id, work_type, since.strftime("%Y-%m-%d %H:%M:%S")),
         ).fetchone()
@@ -1170,14 +1171,15 @@ def get_work_summary(user_id: int, work_type: str, since: datetime) -> Dict:
         chart_start = today - timedelta(days=6)
         chart_rows = conn.execute(
             """
-            SELECT substr(timestamp, 1, 10) AS day,
+            SELECT substr(COALESCE(NULLIF(started_at, ''), timestamp), 1, 10) AS day,
                    SUM(gross_income + tips - fuel_cost - commission_cost
                        - maintenance_cost - other_cost - rental_cost
                        - insurance_cost - tax_cost - charging_cost
                        - connectivity_cost) AS net_income
             FROM work_shifts
-            WHERE user_id = ? AND work_type = ? AND timestamp >= ?
-            GROUP BY substr(timestamp, 1, 10)
+            WHERE user_id = ? AND work_type = ?
+              AND COALESCE(NULLIF(started_at, ''), timestamp) >= ?
+            GROUP BY substr(COALESCE(NULLIF(started_at, ''), timestamp), 1, 10)
             """,
             (user_id, work_type, chart_start.strftime("%Y-%m-%d")),
         ).fetchall()
@@ -1187,10 +1189,13 @@ def get_work_summary(user_id: int, work_type: str, since: datetime) -> Dict:
                    maintenance_cost, other_cost, rental_cost, insurance_cost,
                    tax_cost, depreciation_cost, charging_cost, connectivity_cost,
                    hours_worked, distance_km, orders_count,
-                   orders_count_known, timestamp
+                   orders_count_known,
+                   COALESCE(NULLIF(started_at, ''), timestamp) AS timestamp,
+                   started_at
             FROM work_shifts
-            WHERE user_id = ? AND work_type = ? AND timestamp >= ?
-            ORDER BY timestamp DESC, id DESC
+            WHERE user_id = ? AND work_type = ?
+              AND COALESCE(NULLIF(started_at, ''), timestamp) >= ?
+            ORDER BY COALESCE(NULLIF(started_at, ''), timestamp) DESC, id DESC
             LIMIT 8
             """,
             (user_id, work_type, since.strftime("%Y-%m-%d %H:%M:%S")),
@@ -1206,7 +1211,8 @@ def get_work_summary(user_id: int, work_type: str, since: datetime) -> Dict:
                 COUNT(*)
             FROM work_shifts
             WHERE user_id = ? AND work_type = ?
-              AND timestamp >= ? AND timestamp < ?
+              AND COALESCE(NULLIF(started_at, ''), timestamp) >= ?
+              AND COALESCE(NULLIF(started_at, ''), timestamp) < ?
             """,
             (
                 user_id,
@@ -1217,14 +1223,15 @@ def get_work_summary(user_id: int, work_type: str, since: datetime) -> Dict:
         ).fetchone()
         weekday_rows = conn.execute(
             """
-            SELECT CAST(strftime('%w', timestamp) AS INTEGER) AS weekday,
+            SELECT CAST(strftime('%w', COALESCE(NULLIF(started_at, ''), timestamp)) AS INTEGER) AS weekday,
                    SUM(gross_income + tips - fuel_cost - commission_cost
                        - maintenance_cost - other_cost - rental_cost
                        - insurance_cost - tax_cost - charging_cost
                        - connectivity_cost) AS net_income,
                    SUM(hours_worked) AS hours_worked
             FROM work_shifts
-            WHERE user_id = ? AND work_type = ? AND timestamp >= ?
+            WHERE user_id = ? AND work_type = ?
+              AND COALESCE(NULLIF(started_at, ''), timestamp) >= ?
             GROUP BY weekday
             """,
             (user_id, work_type, since.strftime("%Y-%m-%d %H:%M:%S")),
@@ -1260,7 +1267,8 @@ def get_work_summary(user_id: int, work_type: str, since: datetime) -> Dict:
                        ELSE 0 END), 0),
                    SUM(CASE WHEN orders_count_known = 1 THEN 1 ELSE 0 END)
             FROM work_shifts
-            WHERE user_id = ? AND work_type = ? AND timestamp >= ?
+            WHERE user_id = ? AND work_type = ?
+              AND COALESCE(NULLIF(started_at, ''), timestamp) >= ?
             """,
             (user_id, work_type, since.strftime("%Y-%m-%d %H:%M:%S")),
         ).fetchone()
@@ -1821,7 +1829,9 @@ def evaluate_forecast_snapshots(now: datetime | None = None) -> Dict[str, int]:
                                 SELECT SUM(orders_count) / NULLIF(SUM(hours_worked), 0)
                                 FROM work_shifts
                                 WHERE user_id = ? AND work_type = 'courier'
-                                  AND district = ? AND timestamp >= ? AND timestamp <= ?
+                                  AND district = ?
+                                  AND COALESCE(NULLIF(started_at, ''), timestamp) >= ?
+                                  AND COALESCE(NULLIF(started_at, ''), timestamp) <= ?
                                   AND hours_worked > 0 AND orders_count_known = 1
                                 """,
                                 (
@@ -1842,7 +1852,9 @@ def evaluate_forecast_snapshots(now: datetime | None = None) -> Dict[str, int]:
                                         / NULLIF(SUM(hours_worked), 0)
                                 FROM work_shifts
                                 WHERE user_id = ? AND work_type = 'courier'
-                                  AND district = ? AND timestamp >= ? AND timestamp <= ?
+                                  AND district = ?
+                                  AND COALESCE(NULLIF(started_at, ''), timestamp) >= ?
+                                  AND COALESCE(NULLIF(started_at, ''), timestamp) <= ?
                                   AND hours_worked > 0
                                 """,
                                 (
@@ -1999,7 +2011,8 @@ def get_district_coverage(work_type: str, now: datetime | None = None) -> Dict:
                 """
                 SELECT COUNT(DISTINCT district) FROM work_shifts
                 WHERE work_type = 'courier' AND district IS NOT NULL
-                  AND district <> '' AND hours_worked > 0 AND timestamp >= ?
+                  AND district <> '' AND hours_worked > 0
+                  AND COALESCE(NULLIF(started_at, ''), timestamp) >= ?
                 """,
                 (since,),
             ).fetchone()[0]
@@ -2051,9 +2064,9 @@ def get_demand_forecast_inputs(
               AND work_type = ?
               AND district IS NOT NULL
               AND hours_worked > 0
-              AND timestamp >= ?
-              AND timestamp <= ?
-            ORDER BY timestamp DESC
+              AND COALESCE(NULLIF(started_at, ''), timestamp) >= ?
+              AND COALESCE(NULLIF(started_at, ''), timestamp) <= ?
+            ORDER BY COALESCE(NULLIF(started_at, ''), timestamp) DESC
             """,
             (
                 user_id,
@@ -2078,7 +2091,8 @@ def get_demand_forecast_inputs(
                     AS orders_count_unknown
             FROM work_shifts
             WHERE user_id = ? AND work_type = ?
-              AND timestamp >= ? AND timestamp <= ?
+              AND COALESCE(NULLIF(started_at, ''), timestamp) >= ?
+              AND COALESCE(NULLIF(started_at, ''), timestamp) <= ?
             """,
             (
                 user_id,
@@ -2090,7 +2104,8 @@ def get_demand_forecast_inputs(
         other_direction = conn.execute(
             """
             SELECT COUNT(*) FROM work_shifts
-            WHERE user_id = ? AND work_type <> ? AND timestamp >= ?
+            WHERE user_id = ? AND work_type <> ?
+              AND COALESCE(NULLIF(started_at, ''), timestamp) >= ?
             """,
             (user_id, work_type, since),
         ).fetchone()[0]
@@ -2291,6 +2306,8 @@ def export_user_data(user_id: int) -> Dict:
         "reports": ("driver_reports", "user_id"),
         "subscriptions": ("user_subscriptions", "user_id"),
         "payments": ("telegram_star_payments", "user_id"),
+        "yookassa_payments": ("yookassa_payments", "user_id"),
+        "notifications": ("notifications", "user_id"),
         "reminder_history": ("document_reminder_log", "user_id"),
     }
     with closing(sqlite3.connect(config.DB_PATH)) as conn:
@@ -2331,6 +2348,7 @@ def delete_user_data(user_id: int) -> None:
         "coefficients", "locations", "work_shifts", "api_rate_limits", "driver_reports",
         "driver_profiles", "user_subscriptions", "payment_support_pending",
         "document_reminder_log", "telegram_star_payments",
+        "yookassa_payments", "notifications",
         "notification_preferences",
     )
     with closing(sqlite3.connect(config.DB_PATH)) as conn:
