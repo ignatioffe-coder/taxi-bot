@@ -47,6 +47,42 @@ class PoiDensityTests(unittest.TestCase):
         self.assertEqual(external_factors.poi_scores(empty), {})
 
 
+class CommunitySignalTests(unittest.TestCase):
+    def test_community_multiplier_is_capped_and_district_specific(self):
+        snapshot = {
+            "district_hourly": {
+                "Арбат": {
+                    "10": {
+                        "messages": 5,
+                        "demand_score": 1.0,
+                        "categories": {"many_orders": 5},
+                    }
+                }
+            }
+        }
+        with patch.object(external_factors, "load_community_signals", return_value=snapshot):
+            impacts, details = external_factors.community_demand_impacts(
+                datetime(2026, 11, 23, 10, 0)
+            )
+        self.assertEqual(impacts["Арбат"], 0.03)
+        self.assertEqual(details["Арбат"]["messages"], 5)
+
+    def test_community_signals_require_enough_messages(self):
+        snapshot = {
+            "district_hourly": {
+                "Арбат": {
+                    "10": {"messages": 2, "demand_score": 1.0},
+                }
+            }
+        }
+        with patch.object(external_factors, "load_community_signals", return_value=snapshot):
+            impacts, details = external_factors.community_demand_impacts(
+                datetime(2026, 11, 23, 10, 0)
+            )
+        self.assertEqual(impacts, {})
+        self.assertEqual(details, {})
+
+
 class OpenMeteoForecastTests(unittest.TestCase):
     def setUp(self):
         external_factors._weather_cache.update({"value": None, "at": 0.0})
@@ -128,6 +164,25 @@ class ForecastFactorTests(unittest.TestCase):
         self.assertEqual(wet["items"][0]["score_base"], dry["items"][0]["score"])
         self.assertTrue(wet["factors"]["weather"])
         self.assertIn("Сильный дождь", wet["note"])
+
+    def test_community_signal_changes_score_by_at_most_three_percent(self):
+        dry = build_forecast("taxi", self._taxi_inputs(), now=self.now)
+        positive = build_forecast(
+            "taxi",
+            self._taxi_inputs(),
+            now=self.now,
+            factors={"community": {"Тверской": 0.03}},
+        )
+        negative = build_forecast(
+            "taxi",
+            self._taxi_inputs(),
+            now=self.now,
+            factors={"community": {"Тверской": -0.03}},
+        )
+        base = dry["items"][0]["score"]
+        self.assertGreater(positive["items"][0]["score"], base)
+        self.assertLess(negative["items"][0]["score"], base)
+        self.assertEqual(positive["items"][0]["score_base"], base)
 
     def test_score_never_exceeds_100_after_weather_bonus(self):
         forecast = build_forecast(

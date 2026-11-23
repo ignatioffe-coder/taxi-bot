@@ -23,6 +23,7 @@ import config
 
 ROOT = Path(__file__).resolve().parent
 POI_PATH = ROOT / "static" / "district-poi.json"
+COMMUNITY_SIGNALS_PATH = ROOT / "static" / "telegram-community-signals.json"
 LOGGER = logging.getLogger(__name__)
 
 MOSCOW_LAT = 55.7558
@@ -70,6 +71,7 @@ WMO = {
 _lock = threading.Lock()
 _weather_cache: dict = {"value": None, "at": 0.0}
 _poi_cache: dict = {"value": None}
+_community_signals_cache: dict = {"value": None}
 
 
 def describe_weather(code: int | None) -> tuple[str, str, float]:
@@ -212,6 +214,53 @@ def poi_index(district: str, density: dict | None = None) -> float | None:
     return poi_scores(density).get(district)
 
 
+def load_community_signals() -> dict:
+    """Агрегированный и обезличенный снимок Telegram-сигналов."""
+    with _lock:
+        if _community_signals_cache["value"] is not None:
+            return _community_signals_cache["value"]
+    try:
+        payload = json.loads(
+            COMMUNITY_SIGNALS_PATH.read_text(encoding="utf-8")
+        )
+        value = payload if isinstance(payload, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        value = {}
+    with _lock:
+        _community_signals_cache["value"] = value
+    return value
+
+
+def community_demand_impacts(now=None) -> tuple[dict[str, float], dict[str, dict]]:
+    """Короткий осторожный множитель по району и часу.
+
+    Возвращает только слабые сигналы из месячного обезличенного экспорта:
+    от -3% до +3%. Грубый сетевой контекст не считается фактическим спросом.
+    """
+    snapshot = load_community_signals()
+    moment = now or config.get_moscow_time()
+    hour = str(moment.hour)
+    impacts: dict[str, float] = {}
+    details: dict[str, dict] = {}
+    for district, rows in (snapshot.get("district_hourly") or {}).items():
+        row = rows.get(hour) or {}
+        try:
+            score = float(row.get("demand_score") or 0)
+            messages = int(row.get("messages") or 0)
+        except (TypeError, ValueError):
+            continue
+        if messages < 3 or abs(score) < 0.25:
+            continue
+        impact = max(-0.03, min(0.03, score * 0.03))
+        impacts[district] = round(impact, 4)
+        details[district] = {
+            "messages": messages,
+            "demand_score": round(score, 3),
+            "categories": row.get("categories") or {},
+        }
+    return impacts, details
+
+
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Расстояние между двумя точками в километрах."""
     radius = 6371.0
@@ -232,6 +281,8 @@ def load_live_factors(now=None) -> dict:
     airport_impacts: dict = {}
     event_impacts: dict = {}
     traffic_impacts: dict = {}
+    community_impacts: dict = {}
+    community_details: dict = {}
     centers: dict = {}
     try:
         # Импорт внутри функции: airports и events сами используют этот модуль
@@ -253,10 +304,17 @@ def load_live_factors(now=None) -> dict:
     except Exception:  # noqa: BLE001 - внешний источник не должен ронять прогноз
         LOGGER.exception("Не удалось загрузить фактор пробок TomTom")
 
+    try:
+        community_impacts, community_details = community_demand_impacts(moment)
+    except Exception:  # noqa: BLE001 - локальный снимок не должен ронять прогноз
+        LOGGER.exception("Не удалось загрузить Telegram-сигналами")
+
     return {
         "weather": get_weather(),
         "poi_density": load_poi_density(),
         "airports": airport_impacts,
         "events": event_impacts,
         "traffic": traffic_impacts,
+        "community": community_impacts,
+        "community_details": community_details,
     }

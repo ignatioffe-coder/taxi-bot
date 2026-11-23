@@ -1,0 +1,316 @@
+{
+  "source": "Telegram community export",
+  "date_from": "01.11.2026",
+  "date_to": "23.11.2026",
+  "privacy": "only aggregated counts and categories; no names or Telegram IDs",
+  "hourly": {
+    "0": {
+      "messages": 42,
+      "demand_score": -0.048,
+      "categories": {
+        "weather": 31,
+        "payment_issue": 7,
+        "support_issue": 3,
+        "traffic": 2,
+        "rental_issue": 1
+      }
+    },
+    "1": {
+      "messages": 27,
+      "demand_score": -0.111,
+      "categories": {
+        "weather": 20,
+        "payment_issue": 5,
+        "no_orders": 1,
+        "traffic": 2
+      }
+    },
+    "2": {
+      "messages": 13,
+      "demand_score": -0.231,
+      "categories": {
+        "weather": 9,
+        "no_orders": 2,
+        "long_wait": 1,
+        "payment_issue": 1
+      }
+    },
+    "3": {
+      "messages": 4,
+      "demand_score": -0.75,
+      "categories": {
+        "no_orders": 2,
+        "many_orders": 1,
+        "long_wait": 1,
+        "weather": 1,
+        "traffic": 1
+      }
+    },
+    "4": {
+      "messages": 16,
+      "demand_score": -0.062,
+      "categories": {
+        "weather": 10,
+        "traffic": 1,
+        "payment_issue": 4,
+        "support_issue": 1
+      }
+    },
+    "5": {
+      "messages": 1,
+      "demand_score": 0.0,
+      "categories": {
+        "support_issue": 1
+      }
+    },
+    "6": {
+      "messages": 2,
+      "demand_score": 0.0,
+      "categories": {
+        "weather": 2
+      }
+    },
+    "7": {
+      "messages": 6,
+      "demand_score": -0.167,
+      "categories": {
+        "weather": 5,
+        "traffic": 1
+      }
+    },
+    "8": {
+      "messages": 13,
+      "demand_score": 0.0,
+      "categories": {
+        "weather": 11,
+        "support_issue": 1,
+        "payment_issue": 2
+      }
+    },
+    "9": {
+      "messages": 27,
+      "demand_score": -0.185,
+      "categories": {
+        "long_wait": 3,
+        "payment_issue": 4,
+        "weather": 17,
+        "no_orders": 1,
+        "traffic": 1,
+        "support_issue": 2
+      }
+    },
+    "10": {
+      "messages": 36,
+      "demand_score": 0.0,
+      "categories": {
+        "weather": 22,
+        "payment_issue": 8,
+        "support_issue": 4,
+        "traffic": 1,
+        "many_orders": 1
+      }
+    },
+    "11": {
+      "messages": 52,
+      "demand_score": 0.019,
+      "categories": {
+        "weather": 36,
+        "payment_issue": 11,
+        "many_orders": 2,
+        "support_issue": 3,
+        "long_wait": 1
+      }
+    },
+    "12": {
+      "messages": 49,
+      "demand_score": -0.02,
+      "categories": {
+        "payment_issue": 23,
+        "weather": 22,
+        "support_issue": 4,
+        "long_wait": 1
+      }
+    },
+    "13": {
+      "messages": 39,
+      "demand_score": -0.026,
+      "categories": {
+        "weather": 33,
+        "support_issue": 1,
+        "traffic": 1,
+        "payment_issue": 5
+      }
+    },
+    "14": {
+      "messages": 32,
+      "demand_score": 0.0,
+      "categories": {
+        "weather": 22,
+        "many_orders": 1,
+        "payment_issue": 4,
+        "support_issue": 4,
+        "no_orders": 1
+      }
+    },
+    "15": {
+      "messages": 35,
+      "demand_score": 0.0,
+      "categories": {
+        "weather": 24,
+        "payment_issue": 9,
+        "support_issue": 3
+      }
+    },
+    "16": {
+      "messages": 28,
+      "demand_score": -0.071,
+      "categories": {
+        "traffic": 1,
+        "weather": 19,
+        "payment_issue": 4,
+        "no_orders": 2,
+        "support_issue": 3,
+        "many_orders": 1
+      }
+    },
+    "17": {
+      "messages": 34,
+      "demand_score": -0.088,
+      "categories": {
+        "weather": 28,
+        "traffic": 3,
+        "payment_issue": 3,
+        "support_issue": 2
+      }
+    },
+    "18": {
+      "messages": 69,
+      "demand_score": -0.058,
+      "categories": {
+        "payment_issue": 27,
+        "weather": 28,
+        "support_issue": 7,
+        "traffic": 4,
+        "many_orders": 3,
+        "no_orders": 3
+      }
+    },
+    "19": {
+      "messages": 46,
+      "demand_score": -0.065,
+      "categories": {
+        "weather": 33,
+        "payment_issue": 6,
+        "support_issue": 5,
+        "traffic": 3
+      }
+    },
+    "20": {
+      "messages": 30,
+      "demand_score": 0.0,
+      "categories": {
+        "weather": 21,
+        "payment_issue": 7,
+        "support_issue": 2
+      }
+    },
+    "21": {
+      "messages": 42,
+      "demand_score": -0.048,
+      "categories": {
+        "weather": 28,
+        "payment_issue": 8,
+        "support_issue": 3,
+        "traffic": 1,
+        "no_orders": 1,
+        "rental_issue": 1
+      }
+    },
+    "22": {
+      "messages": 42,
+      "demand_score": -0.024,
+      "categories": {
+        "weather": 29,
+        "support_issue": 3,
+        "payment_issue": 6,
+        "no_orders": 1,
+        "traffic": 2,
+        "many_orders": 2
+      }
+    },
+    "23": {
+      "messages": 54,
+      "demand_score": -0.056,
+      "categories": {
+        "weather": 34,
+        "long_wait": 2,
+        "payment_issue": 10,
+        "traffic": 3,
+        "support_issue": 3,
+        "many_orders": 2
+      }
+    }
+  },
+  "district_hourly": {
+    "Арбат": {
+      "1": {
+        "messages": 1,
+        "demand_score": -1.0,
+        "categories": {
+          "no_orders": 1,
+          "weather": 1
+        }
+      },
+      "10": {
+        "messages": 1,
+        "demand_score": 0.0,
+        "categories": {
+          "payment_issue": 1
+        }
+      },
+      "14": {
+        "messages": 1,
+        "demand_score": -1.0,
+        "categories": {
+          "no_orders": 1
+        }
+      },
+      "18": {
+        "messages": 1,
+        "demand_score": 1.0,
+        "categories": {
+          "many_orders": 1
+        }
+      }
+    },
+    "Бирюлёво Восточное": {
+      "3": {
+        "messages": 1,
+        "demand_score": -1.0,
+        "categories": {
+          "no_orders": 1,
+          "many_orders": 1,
+          "long_wait": 1
+        }
+      }
+    },
+    "Северное Бутово": {
+      "18": {
+        "messages": 1,
+        "demand_score": 0.0,
+        "categories": {
+          "weather": 1
+        }
+      }
+    },
+    "Тверской": {
+      "7": {
+        "messages": 1,
+        "demand_score": 0.0,
+        "categories": {
+          "weather": 1
+        }
+      }
+    }
+  }
+}
