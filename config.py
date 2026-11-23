@@ -31,6 +31,9 @@ YANDEX_MAPS_API_KEY = os.getenv("YANDEX_MAPS_API_KEY", "").strip()
 TOMTOM_TRAFFIC_API_KEY = os.getenv("TOMTOM_TRAFFIC_API_KEY", "").strip()
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "").strip()
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "").strip()
+YOOKASSA_RECURRING_ENABLED = os.getenv(
+    "YOOKASSA_RECURRING_ENABLED", ""
+).strip().lower() in {"1", "true", "yes"}
 
 # ID администратора (твой или брата) — для отчётов и управления
 ADMIN_IDS = [7925732814, 6965289477]

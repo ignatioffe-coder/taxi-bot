@@ -191,6 +191,16 @@ def _traffic_multiplier(factors: dict, district: str) -> float:
     return 1.0 - min(0.12, max(0.0, impact))
 
 
+def _community_multiplier(factors: dict, district: str) -> float:
+    """Cautious multiplier from anonymised historical Telegram signals."""
+    community = factors.get("community") or {}
+    try:
+        impact = float(community.get(district, 0))
+    except (TypeError, ValueError):
+        return 1.0
+    return 1.0 + max(-0.03, min(0.03, impact))
+
+
 def _traffic_suffix(factors: dict) -> str:
     if not factors.get("traffic"):
         return ""
@@ -341,6 +351,7 @@ def _taxi_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             multiplier
             * _location_multiplier(factors, district)
             * _traffic_multiplier(factors, district)
+            * _community_multiplier(factors, district)
             * _reports_multiplier(factors, district),
         )
 
@@ -467,6 +478,7 @@ def _baseline_items(
             multiplier
             * _location_multiplier(factors, district)
             * _traffic_multiplier(factors, district)
+            * _community_multiplier(factors, district)
             * _reports_multiplier(factors, district),
         )
         items.append({
@@ -843,6 +855,7 @@ def _courier_forecast(inputs: dict, now: datetime, factors: dict) -> dict:
             multiplier
             * _location_multiplier(factors, district)
             * _traffic_multiplier(factors, district)
+            * _community_multiplier(factors, district)
             * _reports_multiplier(factors, district),
         )
         net_income_per_hour = (

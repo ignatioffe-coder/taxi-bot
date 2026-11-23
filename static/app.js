@@ -83,13 +83,26 @@
     const access = subscription || {};
     const title = $("subscription-title");
     const status = $("subscription-status");
+    const recurringAvailable = Boolean(access.auto_renew_available);
     $("subscription-price-amount").textContent = `${access.price_rub || 500} ₽`;
     $("subscription-period-label").textContent =
       access.status === "paid" && !access.auto_renew
         ? `${access.period_days || 30} дней после текущего периода`
-        : `за ${access.period_days || 30} дней · автопродление`;
+        : recurringAvailable
+          ? `за ${access.period_days || 30} дней · автопродление`
+          : `за ${access.period_days || 30} дней · продление вручную`;
+    $("subscription-price-note").textContent = recurringAvailable
+      ? "Первый платёж — 500 ₽. Способ оплаты сохраняется в ЮKassa для списания раз в 30 дней; автопродление можно отключить в профиле."
+      : "Оплата разовая — 500 ₽ за 30 дней. Автоматических списаний нет; новый период можно оплатить вручную.";
+    $("subscription-renewal-term").textContent = recurringAvailable
+      ? "Подписка стоит 500 ₽ за 30 дней. Подтверждая оплату, я соглашаюсь сохранить выбранный способ оплаты в ЮKassa и автоматически списывать 500 ₽ каждые 30 дней."
+      : "Подписка стоит 500 ₽ за 30 дней. Оплата разовая; новый период оформляется вручную.";
+    $("subscription-cancel-term").hidden = !recurringAvailable;
+    $("subscription-consent-detail").textContent = recurringAvailable
+      ? "согласен(на) на сохранение способа оплаты и автосписание 500 ₽ раз в 30 дней."
+      : "подтверждаю разовую оплату 500 ₽ за 30 дней.";
     $("subscription-cancel-button").hidden =
-      !(access.status === "paid" && access.auto_renew);
+      !(recurringAvailable && access.status === "paid" && access.auto_renew);
     $("subscribe-button").hidden =
       access.status === "paid" && access.auto_renew;
     $("subscription-consent").closest(".subscription-consent").hidden =
@@ -104,7 +117,7 @@
       title.textContent = "Подписка активна";
       status.textContent = access.auto_renew
         ? `Доступ до ${new Date(access.paid_until * 1000).toLocaleDateString("ru-RU")}. Следующее списание — 500 ₽ за 30 дней.`
-        : `Доступ до ${new Date(access.paid_until * 1000).toLocaleDateString("ru-RU")}. Автопродление отключено; если оплатить сейчас, новый период начнётся после этой даты.`;
+        : `Доступ до ${new Date(access.paid_until * 1000).toLocaleDateString("ru-RU")}. ${recurringAvailable ? "Автопродление отключено" : "Автоматических списаний нет"}; если оплатить сейчас, новый период начнётся после этой даты.`;
     } else if (access.status === "trial" && access.trial_expires_at) {
       title.textContent = "Оплатить подписку сейчас";
       status.textContent = `Пробный период бесплатный до ${new Date(access.trial_expires_at * 1000).toLocaleDateString("ru-RU")}. При оплате сейчас 30-дневная подписка начнётся сразу.`;
@@ -147,7 +160,7 @@
       badge.className = "subscription-badge";
       info.textContent = access.auto_renew
         ? `Доступ до ${endDate(access.paid_until)}. Следующее списание — 500 ₽ за 30 дней. Автопродление можно отключить здесь.`
-        : `Доступ до ${endDate(access.paid_until)}. Автопродление отключено.`;
+        : `Доступ до ${endDate(access.paid_until)}. ${access.auto_renew_available ? "Автопродление отключено" : "Продление — вручную"}.`;
       $("profile-subscription-button-label").textContent =
         access.auto_renew ? "Управлять подпиской" : "Продлить подписку";
     } else {
