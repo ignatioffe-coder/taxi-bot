@@ -78,9 +78,13 @@ async def cmd_help(message: types.Message):
         message,
         "Все функции MOVENTA находятся в Mini App. "
         "Открой его кнопкой под этим сообщением.\n\n"
-        "Пробный период — 7 дней, затем подписка 500 ₽ за 30 дней "
-        "с автопродлением через ЮKassa. "
-        "Условия: /terms. Вопросы по оплате: /paysupport.",
+        "Пробный период — 7 дней, затем подписка 500 ₽ за 30 дней. "
+        + (
+            "Автопродление через ЮKassa включено. "
+            if config.YOOKASSA_RECURRING_ENABLED
+            else "Продление — вручную, автоматических списаний нет. "
+        )
+        + "Условия: /terms. Вопросы по оплате: /paysupport.",
     )
 
 
@@ -241,7 +245,7 @@ async def notify_yookassa_renewal_failure(user_id: int) -> None:
 async def yookassa_renewal_loop():
     """Run due recurring charges; ambiguous requests reuse the same idempotency key."""
     while True:
-        if yookassa.is_configured():
+        if config.YOOKASSA_RECURRING_ENABLED and yookassa.is_configured():
             try:
                 due_subscriptions = await asyncio.to_thread(
                     database.get_due_yookassa_subscriptions

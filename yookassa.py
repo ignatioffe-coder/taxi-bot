@@ -73,7 +73,7 @@ def create_subscription_payment(
             "capture": True,
             "confirmation": {"type": "redirect", "return_url": return_url},
             "description": "Подписка MOVENTA на 30 дней",
-            "save_payment_method": True,
+            "save_payment_method": config.YOOKASSA_RECURRING_ENABLED,
             "metadata": {
                 "payment_ref": payment_ref,
                 "user_id": str(user_id),

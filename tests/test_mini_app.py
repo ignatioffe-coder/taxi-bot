@@ -611,6 +611,74 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(database.get_subscription_access(123456)["status"], "trial")
 
+    async def test_yookassa_one_time_payment_does_not_save_payment_method(self):
+        import database
+
+        headers = {"X-Telegram-Init-Data": self.init_data}
+        await self.complete_onboarding(headers)
+        with patch("config.YOOKASSA_RECURRING_ENABLED", False), patch(
+            "yookassa.is_configured", return_value=True
+        ), patch(
+            "yookassa.create_subscription_payment",
+            return_value={
+                "id": "yk-one-time-1",
+                "status": "pending",
+                "confirmation": {
+                    "confirmation_url": "https://yookassa.example/checkout",
+                },
+            },
+        ):
+            response = await self.client.post(
+                "/api/subscription/payment",
+                headers=headers,
+                json={"accept_terms": True},
+            )
+        self.assertEqual(response.status, 200)
+        provider_payment = {
+            "id": "yk-one-time-1",
+            "status": "succeeded",
+            "paid": True,
+            "amount": {"value": "500.00", "currency": "RUB"},
+            "currency": "RUB",
+            "metadata": {
+                "payment_ref": (await response.json())["payment_ref"],
+                "user_id": "123456",
+                "purpose": "subscription",
+            },
+            "payment_method": {"id": "pm-must-not-be-saved", "saved": True},
+        }
+        with patch("config.YOOKASSA_RECURRING_ENABLED", False), patch(
+            "yookassa.is_configured", return_value=True
+        ), patch("yookassa.get_payment", return_value=provider_payment):
+            response = await self.client.post(
+                "/api/yookassa/webhook",
+                json={
+                    "event": "payment.succeeded",
+                    "object": {"id": "yk-one-time-1"},
+                },
+            )
+        self.assertEqual(response.status, 200)
+        access = database.get_subscription_access(123456)
+        self.assertEqual(access["status"], "paid")
+        self.assertFalse(access["auto_renew"])
+        self.assertFalse(access["payment_method_saved"])
+        self.assertFalse(access["auto_renew_available"])
+        self.assertEqual(database.get_due_yookassa_subscriptions(), [])
+
+    def test_yookassa_initial_payment_does_not_request_method_saving(self):
+        import yookassa
+
+        with patch("config.YOOKASSA_RECURRING_ENABLED", False), patch(
+            "yookassa._request", return_value={}
+        ) as request:
+            yookassa.create_subscription_payment(
+                "payment-ref",
+                123456,
+                "https://moventa.example/return",
+                "idempotence-key",
+            )
+        self.assertFalse(request.call_args.kwargs["payload"]["save_payment_method"])
+
     async def test_yookassa_webhook_verifies_payment_and_can_cancel_auto_renewal(self):
         import database
 
@@ -646,9 +714,9 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             },
             "payment_method": {"id": "pm-saved", "saved": True},
         }
-        with patch("yookassa.is_configured", return_value=True), patch(
-            "yookassa.get_payment", return_value=provider_payment
-        ):
+        with patch("config.YOOKASSA_RECURRING_ENABLED", True), patch(
+            "yookassa.is_configured", return_value=True
+        ), patch("yookassa.get_payment", return_value=provider_payment):
             response = await self.client.post(
                 "/api/yookassa/webhook",
                 json={
@@ -657,7 +725,8 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
         self.assertEqual(response.status, 200)
-        access = database.get_subscription_access(123456)
+        with patch("config.YOOKASSA_RECURRING_ENABLED", True):
+            access = database.get_subscription_access(123456)
         self.assertEqual(access["status"], "paid")
         self.assertTrue(access["auto_renew"])
         self.assertTrue(access["payment_method_saved"])
@@ -756,13 +825,14 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             conn.commit()
 
         self.assertEqual(database.get_due_yookassa_subscriptions(now=now), [])
-        due = database.get_due_yookassa_subscriptions(now=now + 120)
-        self.assertEqual([item["user_id"] for item in due], [123456])
-        payment = database.start_yookassa_payment(
-            123456,
-            "renewal",
-            now=now + 120,
-        )
+        with patch("config.YOOKASSA_RECURRING_ENABLED", True):
+            due = database.get_due_yookassa_subscriptions(now=now + 120)
+            self.assertEqual([item["user_id"] for item in due], [123456])
+            payment = database.start_yookassa_payment(
+                123456,
+                "renewal",
+                now=now + 120,
+            )
         provider_payment = {
             "id": "yk-renewal-1",
             "status": "succeeded",
@@ -781,21 +851,23 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
             "succeeded",
             now=now + 120,
         ))
-        self.assertTrue(database.record_yookassa_payment(
-            payment["payment_ref"],
-            provider_payment,
-            now=now + 120,
-        ))
+        with patch("config.YOOKASSA_RECURRING_ENABLED", True):
+            self.assertTrue(database.record_yookassa_payment(
+                payment["payment_ref"],
+                provider_payment,
+                now=now + 120,
+            ))
         renewed_until = database.get_subscription_access(123456)["paid_until"]
         self.assertEqual(
             renewed_until,
             now + 120 + subscriptions.SUBSCRIPTION_PERIOD_SECONDS,
         )
-        self.assertTrue(database.record_yookassa_payment(
-            payment["payment_ref"],
-            provider_payment,
-            now=now + 240,
-        ))
+        with patch("config.YOOKASSA_RECURRING_ENABLED", True):
+            self.assertTrue(database.record_yookassa_payment(
+                payment["payment_ref"],
+                provider_payment,
+                now=now + 240,
+            ))
         self.assertEqual(
             database.get_subscription_access(123456)["paid_until"],
             renewed_until,
@@ -809,6 +881,7 @@ class MiniAppApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("MOVENTA", html)
         self.assertIn("500 ₽", html)
         self.assertIn("ЮKassa", html)
+        self.assertIn("продление вручную", html)
         self.assertNotIn("PremiumBot", html)
         self.assertNotIn("leaflet", html.lower())
 

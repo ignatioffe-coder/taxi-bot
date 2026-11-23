@@ -551,8 +551,14 @@ def get_subscription_access(user_id: int, now: int | None = None) -> Dict:
         "trial_started_at": row["trial_started_at"],
         "trial_expires_at": trial_expires_at,
         "paid_until": paid_until,
-        "auto_renew": bool(row["auto_renew"]),
-        "payment_method_saved": bool(row["yookassa_payment_method_id"]),
+        "auto_renew": (
+            config.YOOKASSA_RECURRING_ENABLED and bool(row["auto_renew"])
+        ),
+        "auto_renew_available": config.YOOKASSA_RECURRING_ENABLED,
+        "payment_method_saved": (
+            config.YOOKASSA_RECURRING_ENABLED
+            and bool(row["yookassa_payment_method_id"])
+        ),
     }
 
 
@@ -600,7 +606,11 @@ def start_yookassa_payment(
             period_start = max(paid_until, current_time)
             method_id = ""
         else:
-            if not auto_renew or not saved_method_id:
+            if (
+                not config.YOOKASSA_RECURRING_ENABLED
+                or not auto_renew
+                or not saved_method_id
+            ):
                 conn.rollback()
                 raise ValueError("Auto-renewal is not enabled")
             period_start = paid_until
@@ -757,7 +767,10 @@ def record_yookassa_payment(
         expires_at = effective_start + subscriptions.SUBSCRIPTION_PERIOD_SECONDS
         saved_method_id = (
             payment_method.get("id")
-            if payment_method.get("saved") is True
+            if (
+                config.YOOKASSA_RECURRING_ENABLED
+                and payment_method.get("saved") is True
+            )
             else ""
         )
         if record["kind"] == "initial":
@@ -861,6 +874,8 @@ def get_due_yookassa_subscriptions(
     now: int | None = None,
     lead_seconds: int = 0,
 ) -> List[Dict]:
+    if not config.YOOKASSA_RECURRING_ENABLED:
+        return []
     current_time = int(time.time()) if now is None else now
     with closing(sqlite3.connect(config.DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row

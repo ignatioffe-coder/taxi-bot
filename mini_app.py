@@ -538,6 +538,7 @@ async def get_profile(request: web.Request) -> web.Response:
         subscription_access.update({
             "price_rub": subscriptions.MONTHLY_PRICE_RUB,
             "period_days": subscriptions.SUBSCRIPTION_PERIOD_SECONDS // (24 * 60 * 60),
+            "auto_renew_available": config.YOOKASSA_RECURRING_ENABLED,
         })
     notifications = (
         await asyncio.to_thread(database.get_notification_preferences, user["id"])

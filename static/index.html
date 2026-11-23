@@ -7,7 +7,7 @@
   <title>MOVENTA</title>
   <link rel="stylesheet" href="/static/styles.css?v=47">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script src="/static/app.js?v=38" defer></script>
+  <script src="/static/app.js?v=39" defer></script>
 </head>
 <body>
   <main class="app-shell">
@@ -346,21 +346,21 @@
         <li>Карта коэффициентов и сообщения сообщества</li>
         <li>Уведомления, когда спрос начинает расти</li>
       </ul>
-      <div class="subscription-price"><strong id="subscription-price-amount">500 ₽</strong><span id="subscription-period-label">за 30 дней · автопродление</span></div>
-      <p class="subscription-price-note">Первый платёж — 500 ₽. Способ оплаты сохраняется в ЮKassa для списания раз в 30 дней. Отключить автопродление можно в профиле в любой момент.</p>
+      <div class="subscription-price"><strong id="subscription-price-amount">500 ₽</strong><span id="subscription-period-label">за 30 дней · продление вручную</span></div>
+      <p id="subscription-price-note" class="subscription-price-note">Оплата разовая — 500 ₽ за 30 дней на защищённой странице ЮKassa. Автоматических списаний нет; новый период можно оплатить вручную.</p>
       <details id="subscription-terms" class="subscription-help">
         <summary>Условия подписки</summary>
         <ul>
           <li>Пробный доступ — 7 дней с момента заполнения профиля, один раз на аккаунт Telegram.</li>
           <li>Подписку можно оплатить в любой момент. Если текущий оплаченный период ещё действует, новый период начнётся после него; во время пробного периода или после его окончания — после оплаты.</li>
-          <li>Подписка стоит 500 ₽ за 30 дней. Подтверждая оплату, я соглашаюсь сохранить выбранный способ оплаты в ЮKassa и автоматически списывать 500 ₽ каждые 30 дней. Возможность автоплатежей должна быть подключена для магазина в ЮKassa.</li>
-          <li>Автопродление можно отключить в профиле MOVENTA. Новых списаний не будет, доступ останется до конца оплаченного периода.</li>
+          <li id="subscription-renewal-term">Подписка стоит 500 ₽ за 30 дней. Оплата разовая; новый период оформляется вручную.</li>
+          <li id="subscription-cancel-term" hidden>Автопродление можно отключить в профиле MOVENTA. Новых списаний не будет, доступ останется до конца оплаченного периода.</li>
           <li>По вопросам оплаты отправь команду /paysupport боту MOVENTA.</li>
         </ul>
       </details>
       <label class="subscription-consent" for="subscription-consent">
         <input id="subscription-consent" type="checkbox">
-        <span>Я принимаю <a href="#subscription-terms">условия</a>, согласен(на) на сохранение способа оплаты и автосписание 500 ₽ раз в 30 дней.</span>
+        <span>Я принимаю <a href="#subscription-terms">условия</a>, <span id="subscription-consent-detail">подтверждаю разовую оплату 500 ₽ за 30 дней.</span></span>
       </label>
       <button id="subscribe-button" class="primary-button" type="button" disabled>
         <span id="subscribe-button-label">Оплатить подписку</span><span>→</span>
